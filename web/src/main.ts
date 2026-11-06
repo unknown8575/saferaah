@@ -2,14 +2,16 @@ import './styles.css';
 import { h, clear, fmtDuration, fmtDist } from './dom.ts';
 import { SafeMap, loadBasemap, hasTraffic } from './map.ts';
 import { PlaceSearch, type Entry, type Hit } from './search.ts';
-import { icon, placeIcon, REPORT_ICON } from './icons.ts';
+import { icon, placeIcon, REPORT_ICON, subIcon } from './icons.ts';
+import { loadPlaces, placesReady, knownSubs, nearbyFor, type BrowsePlace } from './browse.ts';
+import { matchIntent, kindCat, type Intent } from '../../shared/kinds.ts';
 import { load, save, normalisePhone, type Contact } from './store.ts';
 import { api, live, checkServer, isOnline, serverSms, initPreviewStore, liveAvailable, livePreview, type JourneyHandle } from './api.ts';
 import { gpsSource, simulatedSource, type PositionSource } from './location.ts';
 import { smsLink, whatsappLink, telLink, shareUrl, arrivalText, startText, sosText, HELPLINES, notifyPhones } from './messages.ts';
 import type { RouteReply, WorkerRoute } from './worker.ts';
 import { TIER_INFO, tierOf, type Tier } from '../../shared/router.ts';
-import { CAT_INFO, type Poi, type PoiCat } from '../../shared/places.ts';
+import { CAT_INFO, isOpenAt, type Poi, type PoiCat } from '../../shared/places.ts';
 import { MODE_INFO, MODES, WALK_KMH, type Mode } from '../../shared/modes.ts';
 import { JourneyMonitor, type Fix, type JourneyEvent } from '../../shared/journey.ts';
 import { REPORT_KINDS, type LiveReport, type ReportKind } from '../../shared/live.ts';
@@ -42,6 +44,8 @@ function rpc<T = any>(msg: Record<string, unknown>): Promise<T> {
 interface Place {
   lonlat: LonLat; label: string; sub?: string; poi?: number; kind?: string;
   street?: string; risk?: number | null; mine?: boolean;
+  /** for places from the nearby-places index: open/closed from these */
+  cat?: PoiCat; oh?: string;
 }
 type View = 'home' | 'place' | 'category' | 'directions' | 'details' | 'pick' | 'journey' | 'arrived' | 'contacts' | 'help' | 'track';
 type LocStatus = 'idle' | 'asking' | 'on' | 'denied' | 'unavailable';
@@ -216,6 +220,7 @@ async function boot() {
   startLocating();
   setInterval(() => { refreshPois(); applyTheme(); if (S.view === 'home') renderHome(); }, 60000);
   setInterval(() => refreshReports(), 60000);
+  setTimeout(() => loadPlaces(BASE), 2500); // nearby-places index for "gym near me" searches
   if (S.to) { openDirections(); return; }
   goHome();
   if (!S.settings.seenIntro && !DEMO) showIntro();
@@ -397,13 +402,18 @@ function renderSearchTop() {
     placeholder: 'Search here', 'aria-label': 'Search for a place in Delhi', value: S.view === 'place' && S.place ? S.place.label : '',
   });
   const list = h('ul', { class: 'suggest', role: 'listbox', hidden: true });
+  let intent: Intent | null = null;
   const render = () => {
     const q = input.value;
-    const near = myLonLat() ?? [smap.map.getCenter().lng, smap.map.getCenter().lat];
-    const hits = search.query(q, 7, near as [number, number]);
-    const items: HTMLElement[] = hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); openHit(x); } } },
-      h('span', { class: 'sic' }, icon(placeIcon(x.type), 18)), h('span', null, x.name), h('small', null, typeLabel(x.type))));
-    if (q.length >= 2 && !hits.length) items.push(h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market, or tap the map.`));
+    const near = (myLonLat() ?? [smap.map.getCenter().lng, smap.map.getCenter().lat]) as LonLat;
+    const hits = search.query(q, intentFor(q) ? 4 : 7, near as [number, number]);
+    intent = intentFor(q);
+    const items: HTMLElement[] = intentRows(q, near, (p) => { list.hidden = true; input.blur(); openBrowsePlace(p); },
+      (it) => { list.hidden = true; input.blur(); showBrowse(it); }, render);
+    if (items.length && hits.length) items.push(h('li', { class: 'sect', role: 'presentation' }, 'Places by name'));
+    items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); openHit(x); } } },
+      h('span', { class: 'sic' }, icon(placeIcon(x.type), 18)), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
+    if (q.length >= 2 && !items.length) items.push(h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market, or tap the map.`));
     if (q.length < 2) items.push(...CATS.map((c) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); showCategory(c.key); } } },
       h('span', { class: 'sic' }, icon(c.icon, 18)), h('span', null, `${c.label} near you`))));
     clear(list, items);
@@ -412,7 +422,10 @@ function renderSearchTop() {
   input.addEventListener('input', render);
   input.addEventListener('focus', () => { input.select(); render(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') (list.querySelector('li[role=option]') as HTMLElement | null)?.click();
+    if (e.key === 'Enter') {
+      if (intent) { list.hidden = true; input.blur(); showBrowse(intent); }
+      else (list.querySelector('li[role=option]') as HTMLElement | null)?.click();
+    }
     if (e.key === 'Escape') { list.hidden = true; input.blur(); }
   });
   input.addEventListener('blur', () => setTimeout(() => (list.hidden = true), 200));
@@ -437,6 +450,72 @@ function typeLabel(t: string): string {
   const extra: Record<string, string> = { landmark: 'Landmark', park: 'Park', market: 'Market', school: 'School / college', office: 'Office', suburb: 'Area', neighbourhood: 'Area', quarter: 'Area', locality: 'Area' };
   if (extra[t]) return extra[t];
   return (CAT_INFO as Record<string, { label: string }>)[t]?.label ?? (t === 'place' ? 'Place' : t.charAt(0).toUpperCase() + t.slice(1));
+}
+
+// ---------- "gym near me": nearby places by kind ----------
+const intentFor = (q: string) => matchIntent(q, knownSubs());
+
+/** Suggestion rows for a kind of place: the nearest 5–7, or similar places when none are close. */
+function intentRows(q: string, near: LonLat, pick: (p: BrowsePlace) => void, all: ((i: Intent) => void) | null, rerender: () => void): HTMLElement[] {
+  const it = intentFor(q);
+  if (!it) {
+    if (!placesReady() && q.trim().length >= 3) loadPlaces(BASE).then(() => { if (intentFor(q)) rerender(); });
+    return [];
+  }
+  if (!placesReady()) {
+    loadPlaces(BASE).then(rerender);
+    return [h('li', { class: 'empty' }, `Finding ${it.title.toLowerCase()} near you…`)];
+  }
+  const res = nearbyFor(it, near, now());
+  const exact = res.filter((p) => !p.similar).length;
+  const me = myLonLat();
+  const isMe = !!me && me[0] === near[0] && me[1] === near[1];
+  const rows: HTMLElement[] = [h('li', { class: 'sect', role: 'presentation' },
+    exact ? `${it.title} near ${isMe ? 'you' : 'here'}` : `No ${it.one} mapped nearby. Similar places:`)];
+  rows.push(...res.map((p) => h('li', { role: 'option', tabindex: 0, class: 'kind-row', on: { click: () => pick(p) } },
+    h('span', { class: `sic kind${p.similar ? ' sim' : ''}` }, icon(subIcon(p.sub), 18)),
+    h('span', { class: 'kr-main' }, h('span', { class: 'kr-name' }, p.name),
+      h('small', null, p.similar ? `Similar: ${p.label}` : p.label, ` · ${fmtDist(p.distM)}`)),
+    h('span', { class: `open-pill ${p.open ? 'yes' : 'no'}` }, p.open ? (p.verified ? 'Open' : 'Likely open') : 'Closed'))));
+  if (!res.length) rows.push(h('li', { class: 'empty' }, `Nothing like this is mapped within 15 km.`));
+  else if (all) rows.push(h('li', { role: 'option', tabindex: 0, class: 'see-all', id: 'see-all', on: { click: () => all(it) } },
+    h('span', { class: 'sic me-ic' }, icon('map', 18)), h('span', null, `Show ${it.title.toLowerCase()} on the map`)));
+  return rows;
+}
+
+function browsePlace(p: BrowsePlace): Place {
+  return { lonlat: [p.lon, p.lat], label: p.name, sub: p.label, kind: p.sub, cat: kindCat(p.sub), oh: p.oh };
+}
+function openBrowsePlace(p: BrowsePlace) { showPlace(browsePlace(p), true); }
+
+/** All places of a kind near you, as a list and pins (like the category chips). */
+function showBrowse(it: Intent) {
+  if (!placesReady()) { loadPlaces(BASE).then(() => showBrowse(it)); return; }
+  const me = myLonLat();
+  const center: LonLat = me && smap.map.getBounds().contains(me) ? me : [smap.map.getCenter().lng, smap.map.getCenter().lat];
+  setView('category');
+  S.place = null;
+  smap.setPlacePin();
+  S.category = { key: `kind:${it.title}`, title: it.title, items: [] };
+  renderSearchTop();
+  const res = nearbyFor(it, center, now(), { min: 8, max: 25 });
+  const exact = res.filter((p) => !p.similar).length;
+  smap.setHits(res.map((p) => ({ lon: p.lon, lat: p.lat, icon: subIcon(p.sub), open: p.open, label: `${p.name}, ${p.label}, ${p.open ? 'open' : 'closed'}` })),
+    (i) => openBrowsePlace(res[i]));
+  if (res.length) smap.fit([center, ...res.slice(0, 10).map((p) => [p.lon, p.lat] as LonLat)], fitPad());
+  clear(sheet, h('div', { class: 'grip' }),
+    h('div', { class: 'list-head' }, h('h2', null, exact ? `${it.title} nearby` : `Places like a ${it.one}`),
+      h('div', { class: 'meta' }, exact ? `Nearest to ${me && center === me ? 'you' : 'the map centre'}, open state at ${clockText(now())}`
+        : `No ${it.one} is mapped near ${me && center === me ? 'you' : 'here'}, so these are the closest similar places.`)),
+    h('ul', { class: 'places' }, res.length ? res.map((p) => h('li', null,
+      h('button', { class: 'place-row', on: { click: () => openBrowsePlace(p) } },
+        h('span', { class: `pi cat-${kindCat(p.sub)}` }, icon(subIcon(p.sub), 18)),
+        h('div', null, h('b', null, p.name), h('small', null, `${p.similar ? 'Similar: ' : ''}${p.label} · ${fmtDist(p.distM)}`)),
+        h('span', { class: `open-pill ${p.open ? 'yes' : 'no'}` }, p.open ? (p.verified ? 'Open' : 'Likely open') : 'Closed')),
+      h('button', { class: 'btn small go', 'aria-label': `Directions to ${p.name}`,
+        on: { click: () => { S.to = browsePlace(p); S.from = null; S.userPicked = false; openDirections(); } } }, icon('navigate', 18)))) :
+      h('li', { class: 'empty' }, 'Nothing like this is mapped within 15 km yet.')),
+    h('p', { class: 'note' }, 'Places come from OpenStreetMap; some shops may be missing or have moved.'));
 }
 
 // ---------- floating map buttons ----------
@@ -540,6 +619,7 @@ function renderPlace() {
   const poi = p.poi != null ? S.pois[p.poi] : null;
   let open: { open: boolean; verified: boolean } | null = null;
   if (poi) open = poiOpen(poi);
+  else if (p.cat) open = isOpenAt({ cat: p.cat, oh: p.oh }, now());
   const tier = p.risk != null ? tierOf(p.risk, p.risk) : null;
   const subBits = [p.sub, p.street && p.street !== p.label ? p.street : null].filter(Boolean).join(' · ');
   clear(sheet,
@@ -552,7 +632,7 @@ function renderPlace() {
         dist != null ? h('span', null, `${fmtDist(dist)} from you`, dist > 120 ? ` · ~${fmtDuration((dist * 1.3) / (WALK_KMH / 3.6))} walk` : '') : null,
         open ? h('span', { class: `open-pill ${open.open ? 'yes' : 'no'}` }, open.open ? (open.verified ? 'Open now' : 'Likely open now') : 'Closed now') : null,
         tier ? h('span', { class: `street-now tier-text-${tier}` }, h('span', { class: `sw tier-${tier}` }), `Street right now: ${TIER_INFO[tier].label.toLowerCase()}`) : null),
-      poi?.oh ? h('p', { class: 'fine' }, 'Hours: ', poi.oh) : null,
+      (poi?.oh ?? p.oh) ? h('p', { class: 'fine' }, 'Hours: ', poi?.oh ?? p.oh) : null,
       h('div', { class: 'pc-actions' },
         h('button', { class: 'btn primary', id: 'directions', on: { click: () => { S.to = { ...p }; S.from = null; S.userPicked = false; S.reply = null; openDirections(); } } }, icon('navigate', 18), 'Directions'),
         h('button', { class: 'btn', id: 'start-here', on: { click: () => { S.from = { ...p }; S.to = null; S.reply = null; openDirections(); } } }, 'Start from here'),
@@ -690,10 +770,16 @@ function placeField(which: 'from' | 'to'): HTMLElement {
   const render = () => {
     const q = input.value === 'Your location' ? '' : input.value;
     const near = fromLonLat() ?? [77.215, 28.6];
-    const hits = search.query(q, 7, near as [number, number]);
+    const hits = search.query(q, intentFor(q) ? 4 : 7, near as [number, number]);
     const items: HTMLElement[] = [];
     items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('me') } }, h('span', { class: 'sic me-ic' }, icon('locate', 18)), 'Your location',
       !myLonLat() ? h('small', null, 'not found yet') : null));
+    // "gym": the nearest gyms (or similar) to the other end of the trip
+    items.push(...intentRows(q, near as LonLat, (p) => {
+      list.hidden = true; input.blur();
+      if (which === 'from') S.from = browsePlace(p); else S.to = browsePlace(p);
+      S.userPicked = false; openDirections();
+    }, null, render));
     items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => choose(x) } },
       h('span', { class: 'sic' }, icon(placeIcon(x.type), 18)), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
     items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'sic' }, icon('pin', 18)), 'Choose on map'));

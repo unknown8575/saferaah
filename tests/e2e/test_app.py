@@ -433,6 +433,30 @@ def tc109(b, base):
     ctx.close()
 
 
+@case('TC-144', 'typing "gym" lists 5–7 nearby gyms with open state; Enter shows them on the map')
+def tc144(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/'); page.wait_for_selector('#locate.on', timeout=20000)
+    page.locator('#q').click(); page.locator('#q').fill('gym')
+    expect(page.locator('.searchbar .suggest li.sect').first).to_contain_text('Gyms near you', timeout=15000)
+    n = page.locator('.searchbar .suggest li.kind-row').count()
+    assert 5 <= n <= 7, n
+    expect(page.locator('.searchbar .suggest li.kind-row .open-pill').first).to_be_visible()
+    page.locator('.searchbar .suggest li.kind-row').first.click()
+    expect(page.locator('#place-title')).to_be_visible()
+    expect(page.locator('.place-card .meta')).to_contain_text('Gym')
+    page.locator('#q').click(); page.locator('#q').fill('kirana'); page.keyboard.press('Enter')
+    expect(page.locator('.list-head h2')).to_contain_text('Grocery stores', timeout=10000)
+    assert page.locator('.hit-pin').count() >= 5
+    # the destination field understands kinds too
+    page.goto(base + q(CP, IG, mode='walk', demo=1)); wait_routes(page)
+    page.locator('#f-to').click(); page.locator('#f-to').fill('chemist')
+    expect(page.locator('.field-to .suggest li.sect').first).to_contain_text('Medical stores', timeout=10000)
+    page.locator('.field-to .suggest li.kind-row').first.click(); wait_routes(page)
+    ctx.close()
+
+
 def main():
     port, sport = free_port(), free_port()
     env = dict(os.environ, PORT=str(port), DB_PATH=os.path.join(ROOT, 'data', 'e2e.db'), STATIC_DIR=os.path.join(ROOT, 'web', 'dist'))
@@ -458,7 +482,7 @@ def main():
             b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=GL)
             for fn, extra in [(tc90, ()), (tc91, ()), (tc92, ()), (tc93, ()), (tc94, ()), (tc96, ()), (tc97, (static_base,)),
                               (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ()), (tc103, ()), (tc104, ()), (tc105, ()),
-                              (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ())]:
+                              (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ()), (tc144, ())]:
                 if only and not any(o in fn.__name__ for o in only): continue
                 fn(b, base, *extra)
             b.close()

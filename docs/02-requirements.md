@@ -53,6 +53,7 @@
 | FR-28 | Navigation: heading-up follow mode with re-centre and compass; leaving the route re-plans from the current position keeping the user's choice (fastest/safest) and updates the live link; every 5 min offer a clearly safer route if one appears. |
 | FR-29 | Spoken turn-by-turn guidance (English) with mute; a navigation island showing next turn, distance and ETA; in the Android app an ongoing navigation notification promoted to an Android 16 Live Update. |
 | FR-30 | Privacy: location stays on the phone; trip GPS points, route, destination and name are deleted when the trip ends; after-trip questions (2, optional) are anonymous per-street votes; reports and leftovers are purged on schedule; user can wipe all data on the phone. |
+| FR-31 | Search by kind of place (gym, grocery/kirana, chemist, salon, café, ATM…, English and common Hinglish): show the nearest 5–7 with open state; if that kind is not mapped nearby, show similar places; all on the map on Enter; also in the start/destination fields. |
 
 ## 3. Non-functional requirements
 | ID | Requirement |

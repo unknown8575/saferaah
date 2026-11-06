@@ -18,4 +18,5 @@ python3 -I pipeline/pack_to_geojson.py "$PACK" northern-zone data/raw/delhi-nct.
 NODE_OPTIONS=--max-old-space-size=8000 npx tsx pipeline/build-data.ts data/raw/delhi-nct.geojson web/public/data "Delhi NCT"
 rm -rf web/public/data/tiles
 python3 -I pipeline/extract_tiles.py "$PACK/northern-zone.mbtiles" web/public/data/tiles $BBOX
+python3 -I pipeline/build_places.py "$PACK/northern-zone.search" web/public/data/version.json web/public/data/places.json
 echo "Done. Now: npm run build"

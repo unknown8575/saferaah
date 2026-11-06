@@ -139,3 +139,9 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-133 | A edge | Clean-up | unanswered trip gone after 1 h, abandoned trip after 12 h, expired reports and all fixes gone | FR-30 |
 
 | TC-134 | A normal | One person's votes, then a year passes | every street vote has a different pseudonym; all deleted after 365 days | FR-30 |
+| TC-140 | U normal/edge | Kind words: gym, kirana, groc, parlour, chemist, xerox, a mapped type (tattoo); too short (gy); a place name | right kind; null for "gy" and "India Gate" | FR-31 |
+| TC-141 | U normal | "gym" near Connaught Place at 7 pm | 5–7 gyms, nearest first, open state for each | FR-31 |
+| TC-142 | U edge | A rare kind (swimming pool) | similar places fill the list, after any exact ones | FR-31 |
+| TC-143 | U normal | Labels and categories for kinds | friendly names; unknown kinds readable | FR-31 |
+| TC-144 | E normal | Type "gym" with GPS at CP; open one; "kirana" + Enter; "chemist" in the destination field | 5–7 rows with open pills; place card says Gym; map list of grocery stores with ≥5 pins; route to a medical store | FR-31 |
+

@@ -10,6 +10,7 @@ The same six animations are inside the app under **☰ → How to use SafeRaah**
 * **Your blue dot** shows where you are. The light-blue circle is how accurate GPS is; the cone shows which way you face. Tap **◎** (bottom right) to jump back to yourself.
 * **Search here** finds metro stations, police stations, hospitals, markets, landmarks and streets — it works without internet.
 * **Tap anywhere on the map** to drop a pin. The card shows the place or street, how far it is from you, whether it is open now, and how safe that street is right now.
+* **Type a kind of place** — "gym", "kirana", "chemist", "salon", "cafe", "ATM", "xerox", "petrol"… — and the list shows the 5–7 nearest with **Open / Likely open / Closed**. If none of that kind is mapped nearby, it shows the closest similar places (for a gym: sports centres, sports grounds). Press Enter or **Show … on the map** to see them all as pins. It works in the start and destination fields too.
 * **Category chips** under the search bar: Police, Hospitals, Medical stores, Metro, Petrol pumps — the nearest ones, with **Open / Likely open / Closed**.
 * No GPS (location blocked, or indoors)? SafeRaah tells you, and **Mark where I am** lets you put yourself on the map by moving the pin.
 
