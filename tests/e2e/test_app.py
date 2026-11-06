@@ -185,7 +185,7 @@ def tc97(b, base, static_base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
     page.goto(static_base + q(CP, IG, mode='walk', demo=1)); wait_routes(page)
     page.locator('#start').click()
-    expect(page.locator('#sheet')).to_contain_text('Offline: live sharing and reviews need an internet connection', timeout=10000)
+    expect(page.locator('#sheet')).to_contain_text('need the SafeRaah server', timeout=10000)
     ctx.close()
 
 
