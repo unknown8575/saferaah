@@ -1,0 +1,9 @@
+node_modules/
+web/dist/
+data/*.db
+data/*.db-*
+android/app/build/
+android/.gradle/
+ios/App/build/
+ios/DerivedData/
+.DS_Store

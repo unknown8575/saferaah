@@ -1,0 +1,97 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SafeRaah wireframes</title>
+<style>
+  body{margin:0;background:#eef0f3;font:13px/1.35 system-ui,-apple-system,Segoe UI,sans-serif;color:#222;padding:28px}
+  h1{font-size:20px;margin:0 0 4px} p.sub{margin:0 0 22px;color:#555}
+  .row{display:flex;gap:26px;flex-wrap:wrap}
+  .phone{width:250px;height:520px;border:3px solid #333;border-radius:28px;background:#fff;position:relative;overflow:hidden;box-shadow:0 4px 14px #0002}
+  .cap{width:250px;margin-top:8px;font-weight:600;font-size:13px}.cap small{display:block;font-weight:400;color:#555}
+  .map{position:absolute;inset:0;background:repeating-linear-gradient(45deg,#f4f4f4 0 10px,#ececec 10px 20px)}
+  .bar{position:absolute;left:10px;right:10px;background:#fff;border:1.5px solid #555;border-radius:10px;padding:7px 9px}
+  .btn{display:inline-block;border:1.5px solid #333;border-radius:8px;padding:5px 9px;font-weight:600;background:#fff}
+  .sos{position:absolute;right:12px;bottom:14px;width:58px;height:58px;border-radius:50%;background:#d00;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;border:3px solid #600}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #555;border-radius:16px 16px 0 0;padding:10px}
+  .chip{display:inline-block;border:1.5px solid #555;border-radius:14px;padding:3px 8px;margin:2px 2px 4px 0;font-size:12px}
+  .chip.on{background:#222;color:#fff}
+  .rt{display:flex;align-items:center;gap:8px;border:1.5px solid #888;border-radius:9px;padding:6px 8px;margin:5px 0}
+  .sw{width:14px;height:36px;border-radius:4px}
+  .line{position:absolute;height:5px;border-radius:3px;transform-origin:left center}
+  .note{position:absolute;background:#fffbcc;border:1px dashed #b59f00;font-size:11px;padding:3px 5px;border-radius:4px}
+  .muted{color:#666;font-size:11.5px}
+  .big{font-size:22px;font-weight:800}
+  .stars{font-size:22px;letter-spacing:3px}
+</style></head><body>
+<h1>SafeRaah — low-fidelity wireframes</h1>
+<p class="sub">Design rule: one main decision per screen, thumb-reachable buttons, colour + icon + words (never colour alone), SOS always one tap away.</p>
+<div class="row">
+
+<div><div class="phone"><div class="map"></div>
+  <div class="bar" style="top:14px">🔍 Where to?</div>
+  <div class="bar" style="top:56px;font-size:12px">📍 From: My location</div>
+  <div class="note" style="top:100px;left:14px">Search works offline (places, metro, streets)</div>
+  <div class="sheet" style="height:170px">
+    <b>Who is travelling?</b><br><span class="chip on">👩 Woman</span><span class="chip">🧒 Child</span><span class="chip">🙂 Anyone</span><br>
+    <b>How?</b><br><span class="chip on">🚶‍♀️ Walk</span><span class="chip">🛵 Scooty</span><span class="chip">🛺 Auto</span><span class="chip">🚗 Car</span><br>
+    <b>When?</b> <span class="chip on">Now</span><span class="chip">Pick time</span>
+  </div><div class="sos" style="bottom:184px">SOS</div></div>
+  <div class="cap">1. Home / plan<small>Big search box, three simple choices.</small></div></div>
+
+<div><div class="phone"><div class="map"></div>
+  <div class="line" style="background:#8b0000;width:150px;top:150px;left:50px;transform:rotate(20deg)"></div>
+  <div class="line" style="background:#e03131;width:160px;top:140px;left:50px;transform:rotate(30deg)"></div>
+  <div class="line" style="background:#f2a900;width:170px;top:130px;left:50px;transform:rotate(40deg)"></div>
+  <div class="line" style="background:#1f9d55;width:180px;top:120px;left:50px;transform:rotate(50deg)"></div>
+  <div class="sheet" style="height:285px">
+    <div class="muted">⚠️ 11:30 pm — walking is risky on every route. Auto ≈ 9 min. <u>Switch</u></div>
+    <div class="rt"><div class="sw" style="background:#8b0000"></div><div><b>30 min</b> ⚠️ High risk<br><span class="muted">Fastest · 2 dark stretches</span></div></div>
+    <div class="rt"><div class="sw" style="background:#e03131"></div><div><b>35 min</b> ⚠️ Unsafe<br><span class="muted">avoids park</span></div></div>
+    <div class="rt"><div class="sw" style="background:#f2a900"></div><div><b>40 min</b> Take care<br><span class="muted">💊3 🏥1 open</span></div></div>
+    <div class="rt" style="border-width:2.5px"><div class="sw" style="background:#1f9d55"></div><div><b>50 min</b> ✅ Safest<br><span class="muted">👮 near police · 🏪 12 open</span></div></div>
+  </div><div class="sos" style="bottom:300px">SOS</div></div>
+  <div class="cap">2. Pick a route (up to 4)<small>Sorted fastest→safest; colour + label + icon.</small></div></div>
+
+<div><div class="phone"><div class="map"></div>
+  <div class="line" style="background:#1f9d55;width:200px;top:160px;left:30px;transform:rotate(25deg)"></div>
+  <div class="note" style="top:120px;left:120px">⚠️ marker = risky stretch, tap for reason</div>
+  <div class="sheet" style="height:250px">
+    <b>Safest · 50 min · 3.4 km</b><br>
+    <div class="muted">Why: 82% main roads · lit · 👮 2 police · 💊 3 medical stores open now</div>
+    <div class="muted" style="margin-top:6px">Open on the way: 🏥 AIIMS (24×7) · 💊 Apollo (till 11 pm) …</div>
+    <div style="margin-top:8px"><b>Tell when I reach:</b><br><span class="chip on">Maa ✓</span><span class="chip on">Riya ✓</span><span class="chip">+ add</span></div>
+    <div style="margin-top:10px"><span class="btn" style="background:#1f9d55;color:#fff;width:200px;text-align:center">▶ Start journey</span></div>
+  </div></div>
+  <div class="cap">3. Route details<small>Explains the score; pick who gets the arrival message.</small></div></div>
+
+<div><div class="phone"><div class="map"></div>
+  <div class="bar" style="top:14px"><b>↱ Turn left</b> onto Aurobindo Marg · 120 m</div>
+  <div class="note" style="top:70px;left:14px">🟢 Live trip shared with Maa, Riya</div>
+  <div class="sheet" style="height:120px">
+    <div class="big">32 min</div><div class="muted">arrive 12:02 am · 2.1 km left</div>
+    <span class="btn">Share live link</span> <span class="btn">End</span>
+  </div>
+  <div class="sos" style="bottom:134px">SOS</div></div>
+  <div class="cap">4. On the journey<small>Minimal UI; SOS big and red.</small></div></div>
+
+<div><div class="phone"><div class="map" style="opacity:.4"></div>
+  <div class="bar" style="top:120px;text-align:center;padding:14px">
+    <div class="big">Are you OK?</div>
+    <div class="muted">You stopped for 4 min on a quiet stretch</div>
+    <div style="font-size:30px;font-weight:800;margin:8px">0:28</div>
+    <span class="btn" style="background:#1f9d55;color:#fff">I'm OK</span> <span class="btn" style="background:#d00;color:#fff">Send SOS</span>
+    <div class="muted" style="margin-top:6px">No answer → SOS to contacts + call 112</div>
+  </div></div>
+  <div class="cap">5. Check-in / SOS<small>Stopped too long, overdue, or SOS tap.</small></div></div>
+
+<div><div class="phone"><div class="map"></div>
+  <div class="sheet" style="height:330px">
+    <div class="big">✅ You reached!</div>
+    <div class="muted">Arrival message sent to Maa, Riya</div>
+    <hr><b>How safe did this route feel?</b>
+    <div class="stars">☆☆☆☆☆</div>
+    <span class="chip">💡 well lit</span><span class="chip">👥 busy</span><span class="chip">🌑 dark</span><span class="chip">🚷 deserted</span><span class="chip">😟 harassed</span><span class="chip">🐕 dogs</span>
+    <div class="muted">Only verified trips (followed ≥80% of the route) can review. A road changes colour only after 5+ different travellers agree.</div>
+    <span class="btn">Submit</span> <span class="btn">Skip</span>
+  </div></div>
+  <div class="cap">6. Arrived + review<small>Review unlocks only after verified arrival.</small></div></div>
+
+</div></body></html>
