@@ -26,7 +26,7 @@ After the trip **no GPS points, route, destination or name exist on the server**
 1. How safe did the route feel? (1–5)
 2. What did you notice? (well lit, busy, dark, deserted…)
 
-Only trips that really reached the destination can answer. If you answer, each street of the route gets one vote stored as `(street, rating, what you noticed, day)` under a one-way pseudonym — no trip, no time of day, no comment, no app id. The pseudonym for votes is different from the one for live reports, so the two cannot be linked. If you skip, nothing is kept.
+Only trips that really reached the destination can answer. If you answer, each street of the route gets one vote stored as `(street, rating, what you noticed, day)` — no trip, no time of day, no comment, no app id. Every street's vote has its own one-way pseudonym (still one vote per person per street), so one person's votes cannot be grouped together, and none can be linked to live reports. Votes are deleted after a year. If you skip, nothing is kept.
 
 ## Live reports
 A report ("No street lights", "Harassment"…) is a spot on the map, its type and a one-way pseudonym (to stop one phone flooding the map). It is deleted when it expires (2–12 hours).

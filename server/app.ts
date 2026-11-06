@@ -28,12 +28,15 @@ export interface AppOptions {
  *  - At the end the route, destination and name are erased too; what is left (status and
  *    the list of street segments, needed for the optional review) is deleted after the
  *    review, or after REVIEW_WINDOW_MS if the traveller does not answer.
- *  - A review keeps no trip, no comment and no device id: each street gets a vote under a
- *    one-way pseudonym that cannot be linked to reports or trips.
+ *  - A review keeps no trip, no comment and no device id: each street gets a vote under its
+ *    own one-way pseudonym, so votes cannot be linked to each other, to reports or to trips.
+ *    Votes are deleted after a year.
  *  - Live reports are deleted when they expire.
  */
 export const REVIEW_WINDOW_MS = 60 * 60 * 1000;
 export const ABANDONED_TRIP_MS = 12 * 3600 * 1000;
+/** street votes are deleted after a year (by then they would count for less than 6%) */
+export const VOTE_LIFETIME_MS = 365 * 86400000;
 
 class HttpError extends Error {
   constructor(readonly status: number, msg: string) { super(msg); }
@@ -100,6 +103,7 @@ export function createApp(opts: AppOptions): Server {
     db.prepare(`DELETE FROM journeys WHERE (status != 'active' AND status != 'sos' AND COALESCE(ended_at, 0) < ?)
       OR started_at < ?`).run(t - REVIEW_WINDOW_MS, t - ABANDONED_TRIP_MS);
     db.prepare('DELETE FROM reports WHERE expires_at <= ?').run(t);
+    db.prepare('DELETE FROM edge_votes WHERE updated_at < ?').run(t - VOTE_LIFETIME_MS);
   }
   purge();
   const purgeTimer = setInterval(purge, 5 * 60 * 1000);
@@ -300,13 +304,15 @@ export function createApp(opts: AppOptions): Server {
       const t = now();
       // round the time to the day so a vote cannot be matched to a trip by its timestamp
       const day = Math.floor(t / 86400000) * 86400000;
-      const voter = pseudo('vote', dev);
+      // a separate pseudonym for every street: still one vote per person per street, but one
+      // person's votes cannot be grouped together (a set of streets could hint where they live)
+      const voterFor = (e: number) => pseudo(`vote:${e}`, dev);
       db.exec('BEGIN');
       try {
         const up = db.prepare(`INSERT INTO edge_votes (graph_version, edge, device, rating, tags, updated_at) VALUES (?,?,?,?,?,?)
           ON CONFLICT(graph_version, edge, device) DO UPDATE SET rating = excluded.rating, tags = excluded.tags, updated_at = excluded.updated_at`);
         const tagStr = tags.join(',');
-        for (const e of new Set<number>(JSON.parse(j.edges_json))) up.run(j.graph_version, e, voter, rating, tagStr, day);
+        for (const e of new Set<number>(JSON.parse(j.edges_json))) up.run(j.graph_version, e, voterFor(e), rating, tagStr, day);
         // only a bare "reached safely" status stays for the family's link, until the hourly clean-up
         db.prepare(`UPDATE journeys SET edges_json = '[]', review_token = NULL, reviewed = 1, device = '', token = '' WHERE id = ?`).run(j.id);
         db.exec('COMMIT');

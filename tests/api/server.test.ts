@@ -306,6 +306,16 @@ describe('privacy: nothing about a trip is kept after it ends', () => {
     expect(rep).not.toBe(DEV_B);
     expect(votesB.has(rep)).toBe(false);
   });
+  it('TC-134 one person\'s votes cannot be grouped: every street has its own pseudonym; votes expire after a year', async () => {
+    const { j, fin } = await honestTrip(DEV_A);
+    expect((await call('POST', '/api/reviews', { journeyId: j.id, reviewToken: fin.reviewToken, rating: 3, tags: [] })).status).toBe(200);
+    const mine = rows('SELECT edge, device FROM edge_votes WHERE rating = 3');
+    expect(mine.length).toBeGreaterThan(5);
+    expect(new Set(mine.map((v) => v.device)).size).toBe(mine.length);
+    clock += 366 * 86400000;
+    await call('GET', '/api/share/none', undefined, null);
+    expect(rows('SELECT COUNT(*) AS n FROM edge_votes')[0].n).toBe(0);
+  });
   it('TC-133 an unanswered trip is deleted after an hour; an abandoned one after 12 h; expired reports go too', async () => {
     const { j } = await honestTrip();
     const open = await startJourney();
