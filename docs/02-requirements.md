@@ -51,6 +51,7 @@
 | FR-26 | Map-first like Google/Apple Maps: live blue dot with accuracy circle and heading, locate button, search bar over the map, tap anywhere for a place card (name/street, distance, open now, street safety now), category chips, choose start/destination on the map with a centre pin; when GPS is unavailable say so and let the user mark their position. |
 | FR-27 | Directions: start = your location by default, swap, a time for every travel mode, the fastest route selected first, every route showing its precautions (card line, full list in details) and a time label on the map; the user decides. |
 | FR-28 | Navigation: heading-up follow mode with re-centre and compass; leaving the route re-plans from the current position keeping the user's choice (fastest/safest) and updates the live link; every 5 min offer a clearly safer route if one appears. |
+| FR-29 | Spoken turn-by-turn guidance (English) with mute; a navigation island showing next turn, distance and ETA; in the Android app an ongoing navigation notification promoted to an Android 16 Live Update. |
 
 ## 3. Non-functional requirements
 | ID | Requirement |

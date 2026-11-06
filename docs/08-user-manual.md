@@ -28,7 +28,9 @@ The same six animations are inside the app under **☰ → How to use SafeRaah**
 ![Start the journey](../web/public/help/journey.gif)
 
 * Pick who should get your **arrival message**, then tap **▶ Start**.
-* The map turns to face your direction and follows you. The top banner shows the next turn, and a yellow or red strip warns you while you are on a quieter stretch.
+* The map turns to face your direction and follows you. The **island** at the top (a black capsule) shows the next turn, the distance to it and your arrival time; tap it for the step after, your progress and any quieter stretch coming up. A yellow or red ring and strip warn you while you are on a quieter stretch.
+* **Voice:** SafeRaah speaks the turns like a maps app — "In 100 metres, turn left onto …", then again at the turn — and warns "Quieter stretch ahead for 300 metres. Stay alert." Tap 🔊 in the island to mute (also under ☰ → settings).
+* **Android app:** the next turn also stays in your notifications and on the lock screen; on Android 16 it shows as a Live Update chip in the status bar, so you can see the next turn without opening the app.
 * Take a different turn and SafeRaah **finds a new route from where you are**, keeping your choice (fastest or safest). If a clearly **safer route** appears on the way (shops closing, night falling, a new report), it offers it — you can switch or keep yours.
 * **Share live** sends a link your family can open to watch your position (no app needed).
 

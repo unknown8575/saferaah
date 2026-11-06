@@ -131,4 +131,6 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-124 | U normal | Confirmed report mid-route at night | routes through it score riskier and list the reason; the safest avoids it | FR-24 |
 | TC-125 | U normal/edge | Fastest time per mode | walk slowest; matches the router within 5%; outside the map → null | FR-27 |
 | TC-126 | U normal | Precautions | headline for every route; risky night walk suggests auto/cab and sharing; spots listed by reason | FR-27 |
+| TC-127 | U normal | Spoken distances | rounded like people say them (80 metres, 250 metres, 1.5 kilometres) | FR-29 |
+| TC-109 | E normal | Simulated night walk with speech captured | "Starting your trip…", "In N metres, turn …", then the turn itself; island shows distance; tap expands with arrival time; mute stops speech and is remembered | FR-29 |
 
