@@ -97,15 +97,38 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | ID | Type | Case | Expect | Req |
 |---|---|---|---|---|
 | TC-90 | E normal | First run: intro → add 2 contacts (one invalid number first) | error shown, then 2 saved | FR-21 |
-| TC-91 | E normal | Search "India Gate" + "Rajiv Chowk" via UI, Show safe routes | 1–4 route cards with tier labels; lines on map | FR-1, FR-3 |
+| TC-91 | E normal | Search "India Gate" in the map search bar → place card → Directions from Your location; change start by search; swap | 1–4 route cards; lines on map; start/destination swap | FR-1, FR-3 |
 | TC-92 | E normal | Night trip via URL | night theme, advice shown, ranked labels | FR-5, FR-8 |
-| TC-93 | E normal | Route details | facts, havens, contacts toggles, directions | FR-6 |
+| TC-93 | E normal | Route details | precautions box, facts, havens, contacts toggles, directions | FR-6 |
 | TC-94 | E normal | Real-time trip with mocked browser GPS along the route (car, short) | arrival screen, "Tell … you reached" SMS link, review submitted | FR-10–12, FR-17 |
 | TC-95 | E normal | Contact opens live-trip link during the trip | status "On the way" → "Reached safely" | FR-16 |
 | TC-96 | E normal | Stop on route (demo pause) | "Are you OK?" countdown → no answer opens SOS with Call 112 | FR-14, FR-15 |
 | TC-97 | E edge | Server down | planning still works; journey says live sharing unavailable | NFR-4 |
-| TC-98 | E edge | Outside-coverage map pick | toast explains coverage | FR-1 |
-| TC-99 | E normal | Safe places nearby, Help page with GIFs | lists open/closed; 6 guides load | FR-9, FR-22 |
+| TC-98 | E edge | Tap the map outside coverage | toast explains coverage | FR-1 |
+| TC-99 | E normal | Safe places near me, Hospitals chip, Help via menu | lists open/closed with pins; 6 guides load | FR-9, FR-22 |
 | TC-100 | E edge | Every button/link has an accessible name; no horizontal scroll at 360 px | true | NFR-3 |
-| TC-101 | E normal | Desktop 1280 px | side panel layout | NFR-3 |
+| TC-101 | E normal | Desktop 1280 px | search/directions panel and sheet stacked on the left | NFR-3 |
 | TC-102 | E normal | After one visit, reload with the network off | app opens and plans routes | NFR-2 |
+| TC-103 | E normal | Mocked GPS: blue dot + accuracy circle; tap any spot → place card with distance and "street right now"; Directions | fastest route selected first; every card has a precaution; one map label per route; tapping a label selects it; mode tabs show times; auto tab re-plans | FR-26, FR-27 |
+| TC-104 | E edge | Location permission denied | honest "Location is off" note; locate explains; Mark where I am (centre pin) sets a manual location used as "Your location" | FR-26 |
+| TC-105 | E normal | Directions → destination "Choose on map" | centre pin sets the exact destination; routes re-planned | FR-26 |
+| TC-106 | E normal | A second traveller on the route reports harassment | toast, report pin with details; the first traveller's router marks nearby streets and the same route scores riskier | FR-24 |
+| TC-107 | E normal | Layers: street safety now at zoom 15.5 at night | > 100 coloured streets, ≥ 2 colours; switching off hides the layer and is remembered | FR-25 |
+| TC-108 | E normal | Navigation with mocked GPS: walk the wrong way | new route starts where you are; the server's live link shows the new route | FR-28 |
+
+## Live layer (unit and API)
+| ID | Type | Case | Expect | Req |
+|---|---|---|---|---|
+| TC-110 | A normal/edge | Report from > 300 m away; unknown type; valid report | 403; 400; listed with 12 h expiry for "No street lights" | FR-24 |
+| TC-111 | A normal | Same problem reported within 80 m by another device | merged: one report, 2 confirmations | FR-24 |
+| TC-112 | A edge | "Gone" votes from far away; non-boolean vote; gone > confirmed | 403; 400; report hidden | FR-24 |
+| TC-113 | A edge | 8 reports in an hour from one device; 3 h later | 6 accepted then 429; 2-hour reports expired; bad bbox 400 | FR-24, NFR-5 |
+| TC-114 | A normal/edge | Mid-journey re-route with wrong token / valid / bad route | 403 / live link shows new route and ETA / 400 | FR-28 |
+| TC-120 | U normal | `edgesNear` | only streets within the radius; more for a larger radius | FR-24 |
+| TC-121 | U edge | `edgesInBox` with a cap | ≤ cap, keeps the bigger roads | FR-25 |
+| TC-122 | U normal/edge | Report strength | 0.5 alone, 1 confirmed, fades near expiry, 0 expired or dismissed | FR-24 |
+| TC-123 | U normal | Harassment report vs police patrol | nearby risk up by 0.3×weight; patrol lowers risk; far streets unchanged | FR-24 |
+| TC-124 | U normal | Confirmed report mid-route at night | routes through it score riskier and list the reason; the safest avoids it | FR-24 |
+| TC-125 | U normal/edge | Fastest time per mode | walk slowest; matches the router within 5%; outside the map → null | FR-27 |
+| TC-126 | U normal | Precautions | headline for every route; risky night walk suggests auto/cab and sharing; spots listed by reason | FR-27 |
+

@@ -32,7 +32,7 @@ html = open(os.path.join(out, 'index.html')).read()
 js = re.search(r'src="\./(assets/index-[^"]+\.js)"', html).group(1)
 css = re.search(r'href="\./(assets/index-[^"]+\.css)"', html).group(1)
 open(os.path.join(out, 'index.html'), 'w').write(f'''<title>SafeRaah</title>
-<meta name="description" content="Safe routes for women and children across Delhi: up to four routes from fastest to safest, arrival messages and SOS." />
+<meta name="description" content="A safety-first map of Delhi: your location, search, tap any place, fastest-to-safest routes with precautions, live safety reports, arrival messages and SOS." />
 <link rel="icon" href="icon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="./{css}">
 <div id="app"></div>

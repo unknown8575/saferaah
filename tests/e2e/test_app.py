@@ -1,4 +1,4 @@
-"""End-to-end tests (TC-90..TC-101) in headless Chrome at phone size.
+"""End-to-end tests (TC-90..TC-108) in headless Chrome at phone size.
 
 Starts its own server (fresh database) on a free port, runs every case,
 prints a summary and exits non-zero on failure.
@@ -25,6 +25,7 @@ def case(tc, title):
         @functools.wraps(fn)
         def run(*a):
             t = time.time()
+            print(f'… {tc} {title}', flush=True)
             try:
                 fn(*a); results.append((tc, title, 'PASS', time.time() - t, ''))
             except Exception as e:  # noqa
@@ -76,21 +77,31 @@ def tc90(b, base):
     ctx.close()
 
 
-@case('TC-91', 'plan with offline search UI, routes drawn on the map')
+SEEN = "localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true}))"
+DENY_GPS = "navigator.geolocation.watchPosition = (ok, err) => { setTimeout(() => err({ code: 1, message: 'denied' }), 50); return 1; }; navigator.geolocation.clearWatch = () => {};"
+
+
+@case('TC-91', 'search a place, Directions from your location, change the start by search')
 def tc91(b, base):
-    ctx = b.new_context(**PHONE); page = ctx.new_page()
-    page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true}))")
-    page.goto(base + '/'); page.wait_for_selector('#f-from', timeout=20000); page.wait_for_timeout(1500)
-    page.locator('#f-from').click(); page.locator('#f-from').fill('Rajiv Chowk')
-    page.locator('.field-from .suggest li', has_text='Rajiv Chowk').first.click()
-    page.locator('#f-to').click(); page.locator('#f-to').fill('India Gate')
-    page.locator('.field-to .suggest li', has_text='India Gate').first.click()
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/'); page.wait_for_selector('#q', timeout=20000); page.wait_for_timeout(1500)
+    page.locator('#q').click(); page.locator('#q').fill('India Gate')
+    page.locator('.searchbar .suggest li', has_text='India Gate').first.click()
+    expect(page.locator('#place-title')).to_contain_text('India Gate')
+    expect(page.locator('.pc-facts')).to_contain_text('from you')
+    page.locator('#directions').click()
     wait_routes(page)
+    assert page.locator('#f-from').input_value() == 'Your location'
     n = page.locator('.route-card').count()
     assert 1 <= n <= 4, n
-    expect(page.locator('.route-card .tier').first).to_be_visible()
     feats = page.evaluate("() => window.__sr.map.getSource('routes').serialize().data.features.length")
     assert feats == n, (feats, n)
+    page.locator('#f-from').click(); page.locator('#f-from').fill('Mandi House')
+    page.locator('.field-from .suggest li', has_text='Mandi House').first.click()
+    page.wait_for_function("() => window.__sr.S.from && window.__sr.S.from.label.includes('Mandi House') && document.querySelector('.route-card')", timeout=30000)
+    page.locator('#swap').click()
+    page.wait_for_function("() => window.__sr.S.to && window.__sr.S.to.label.includes('Mandi House')", timeout=10000)
     ctx.close()
 
 
@@ -112,6 +123,7 @@ def tc93(b, base):
     page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true, contacts:[{id:'1',name:'Maa',phone:'+919876543210',notify:true}]}))")
     page.goto(base + q(LAJ, GIRI, t='21:30', mode='walk', demo=1)); wait_routes(page)
     page.locator('.route-card.sel').click()
+    expect(page.locator('.prec-box .prec-head')).to_be_visible()
     expect(page.locator('.facts li').first).to_contain_text('main roads')
     expect(page.locator('.havens li').first).to_be_visible()
     expect(page.get_by_role('button', name='✓ Maa')).to_be_visible()
@@ -181,12 +193,12 @@ def tc97(b, base, static_base):
 def tc98(b, base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
     page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true}))")
-    page.goto(base + '/'); page.wait_for_selector('#f-to', timeout=20000); page.wait_for_timeout(2500)
+    page.goto(base + '/'); page.wait_for_selector('#q', timeout=20000); page.wait_for_timeout(2500)
     # pick a visible spot above the sheet, east of the covered area
     lon = page.evaluate("""() => { const m = window.__sr.map; m.jumpTo({center:[77.405, 28.60], zoom: 14}); return m.unproject([195, 220]).lng; }""")
     assert lon > 77.36, lon
     page.wait_for_timeout(500)
-    page.mouse.click(195, 220, button='right')
+    page.mouse.click(195, 220)
     expect(page.locator('#toast')).to_contain_text('outside', timeout=5000)
     ctx.close()
 
@@ -194,13 +206,17 @@ def tc98(b, base):
 @case('TC-99', 'safe places nearby and the help guides')
 def tc99(b, base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
-    page.goto(base + q(LAJ, GIRI, t='13:00', mode='walk', demo=1)); wait_routes(page)
+    page.goto(base + '/?demo=1&t=13:00'); page.wait_for_selector('#q', timeout=20000); page.wait_for_timeout(1500)
     page.get_by_role('button', name='Safe places near me').click()
     page.wait_for_selector('.places li .open-pill', timeout=15000)
     assert page.locator('.places li').count() >= 5
     expect(page.locator('.places')).to_contain_text('Police')
-    page.get_by_role('button', name='Back').click()
-    page.get_by_role('button', name='Help').click()
+    assert page.locator('.hit-pin').count() == page.locator('.places li').count()
+    page.locator('.chip.cat[data-cat=hospital]').click()
+    page.wait_for_function("() => document.querySelector('.list-head h2')?.textContent.includes('Hospitals')", timeout=15000)
+    page.get_by_role('button', name='Clear').click()
+    page.locator('#menu').click()
+    page.get_by_role('button', name='How to use SafeRaah').click()
     expect(page.locator('.guide')).to_have_count(6)
     page.wait_for_timeout(2500)
     loaded = page.evaluate("() => [...document.querySelectorAll('.guide img')].filter(i => i.complete && i.naturalWidth > 0).length")
@@ -228,8 +244,9 @@ def tc100(b, base):
 def tc101(b, base):
     ctx = b.new_context(viewport={'width': 1280, 'height': 800}); page = ctx.new_page()
     page.goto(base + q(CP, IG, mode='walk', demo=1)); wait_routes(page)
-    box = page.locator('#sheet').bounding_box()
-    assert box['x'] < 40 and box['width'] <= 420 and box['height'] > 600, box
+    box = page.locator('#sheet').bounding_box(); tb = page.locator('#top').bounding_box()
+    assert box['x'] < 40 and box['width'] <= 420 and box['y'] >= tb['y'] + tb['height'], (box, tb)
+    assert tb['x'] < 40 and tb['width'] <= 420, tb
     ctx.close()
 
 
@@ -237,7 +254,7 @@ def tc101(b, base):
 def tc102(b, base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
     page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true}))")
-    page.goto(base + '/'); page.wait_for_selector('#f-to', timeout=20000)
+    page.goto(base + '/'); page.wait_for_selector('#q', timeout=20000)
     page.wait_for_function('() => navigator.serviceWorker && navigator.serviceWorker.controller !== undefined', timeout=20000)
     page.wait_for_timeout(9000)  # app caches its bundles a few seconds after start
     cached = page.evaluate("async () => (await (await caches.open('saferaah-v1')).keys()).length")
@@ -245,6 +262,147 @@ def tc102(b, base):
     ctx.set_offline(True)
     page.goto(base + q(CP, IG, mode='walk', simulate=1)); wait_routes(page, timeout=40000)
     assert page.locator('.route-card').count() >= 1
+    ctx.close()
+
+
+@case('TC-103', 'blue dot, tap anywhere on the map, fastest route first with precautions, callouts select routes')
+def tc103(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': LAJ[1], 'longitude': LAJ[0], 'accuracy': 30})
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/?t=21:30'); page.wait_for_selector('.me .me-dot', timeout=20000)
+    page.wait_for_selector('#locate.on', timeout=10000)
+    acc = page.evaluate("() => window.__sr.map.getSource('acc').serialize().data.features.length")
+    assert acc == 1, acc
+    # tap a spot towards Soami Nagar
+    page.evaluate(f"() => window.__sr.map.jumpTo({{ center: [{GIRI[0]}, {GIRI[1]}], zoom: 16 }})")
+    page.wait_for_timeout(800)
+    page.mouse.click(195, 300)
+    page.wait_for_selector('#place-title', timeout=10000)
+    page.wait_for_function("() => document.querySelector('.pc-facts')?.textContent.includes('Street right now')", timeout=10000)
+    page.locator('#directions').click(); wait_routes(page)
+    S = page.evaluate("() => ({ sel: window.__sr.S.selected, labels: window.__sr.S.reply.routes.map(r => r.labels), n: window.__sr.S.reply.routes.length })")
+    assert S['sel'] == 0 and 'Fastest' in S['labels'][0], S
+    expect(page.locator('.route-card').first).to_have_class(__import__('re').compile('sel'))
+    assert page.locator('.rc-prec').count() == S['n']
+    assert page.locator('.callout').count() == S['n']
+    page.wait_for_function("() => [...document.querySelectorAll('.mode-tab small')].filter(x => /min|h/.test(x.textContent)).length >= 3", timeout=20000)
+    if S['n'] > 1:
+        page.locator('.callout').nth(S['n'] - 1).click()
+        page.wait_for_function(f"() => window.__sr.S.selected === {S['n'] - 1}", timeout=5000)
+        expect(page.locator('.route-card').nth(S['n'] - 1)).to_have_class(__import__('re').compile('sel'))
+    # switching mode re-plans with that mode
+    page.locator('.mode-tab[data-mode=auto]').click()
+    page.wait_for_function("() => window.__sr.S.settings.mode === 'auto' && window.__sr.S.reply && window.__sr.S.selected === 0", timeout=30000)
+    ctx.close()
+
+
+@case('TC-104', 'no GPS: honest message, mark where I am on the map, then plan from there')
+def tc104(b, base):
+    ctx = b.new_context(**PHONE); page = ctx.new_page()
+    page.add_init_script(SEEN); page.add_init_script(DENY_GPS)
+    page.goto(base + '/'); page.wait_for_selector('#q', timeout=20000)
+    expect(page.locator('.loc-note')).to_contain_text('Location is off', timeout=10000)
+    page.locator('#locate').click()
+    expect(page.locator('.modal-card h2')).to_contain_text('Location is blocked')
+    page.locator('#mark-me').click()
+    expect(page.locator('#crosshair')).to_be_visible()
+    page.evaluate(f"() => window.__sr.map.jumpTo({{ center: [{CP[0]}, {CP[1]}], zoom: 16 }})")
+    page.wait_for_timeout(1200)
+    expect(page.locator('#pick-label')).not_to_have_text('…')
+    page.locator('#pick-ok').click()
+    page.wait_for_selector('.me.manual', timeout=5000)
+    me = page.evaluate('() => window.__sr.S.manualMe')
+    assert abs(me[0] - CP[0]) < 1e-4 and abs(me[1] - CP[1]) < 1e-4, me
+    page.locator('#q').click(); page.locator('#q').fill('India Gate')
+    page.locator('.searchbar .suggest li', has_text='India Gate').first.click()
+    page.locator('#directions').click(); wait_routes(page)
+    assert page.locator('#f-from').input_value() == 'Your location'
+    ctx.close()
+
+
+@case('TC-105', 'choose the destination on the map with the centre pin')
+def tc105(b, base):
+    ctx = b.new_context(**PHONE); page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + q(CP, IG, mode='walk', demo=1)); wait_routes(page)
+    page.locator('#f-to').click()
+    page.locator('.field-to .suggest li', has_text='Choose on map').click()
+    expect(page.locator('#crosshair')).to_be_visible()
+    page.evaluate("() => window.__sr.map.jumpTo({ center: [77.2090, 28.6139], zoom: 16 })")
+    page.wait_for_timeout(1000)
+    page.locator('#pick-ok').click(); wait_routes(page)
+    to = page.evaluate('() => window.__sr.S.to.lonlat')
+    assert abs(to[0] - 77.2090) < 1e-4 and abs(to[1] - 28.6139) < 1e-4, to
+    ctx.close()
+
+
+@case('TC-106', 'live report: report harassment where you are; the pin shows and routes there get riskier')
+def tc106(b, base):
+    # stand on the middle of the fastest night route, report, and plan again
+    ctx = b.new_context(**PHONE); page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + q(LAJ, GIRI, t='21:30', mode='walk', demo=1)); wait_routes(page)
+    before = page.evaluate('() => window.__sr.S.reply.routes[0]')
+    mid = before['coords'][len(before['coords']) // 2]
+    ctx2 = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': mid[1], 'longitude': mid[0], 'accuracy': 10})
+    p2 = ctx2.new_page(); p2.add_init_script(SEEN)
+    p2.goto(base + '/'); p2.wait_for_selector('#locate.on', timeout=20000)
+    p2.wait_for_function('() => window.__sr.S.reportsAt > 0', timeout=15000)
+    p2.locator('#report-btn').click()
+    p2.locator('.report-kind[data-kind=harassment]').click()
+    expect(p2.locator('#toast')).to_contain_text('Thanks', timeout=10000)
+    p2.wait_for_selector('.report-pin', timeout=10000)
+    p2.locator('.report-pin').first.click()
+    expect(p2.locator('.rp')).to_contain_text('Harassment')
+    # the first traveller's app picks it up on its next refresh and re-plans
+    page.evaluate('() => { window.__sr.S.reportsAt = 0; }')
+    page.wait_for_function(f"""async () => {{ const r = await fetch('/api/reports?bbox=76.8,28.4,77.4,28.9').then(r => r.json()); return r.reports.length > 0; }}""", timeout=10000)
+    ok = page.evaluate("""async () => { const S = window.__sr.S; const r = await fetch('/api/reports?bbox=76.8,28.4,77.4,28.9').then(r => r.json());
+        await window.__sr.rpc({ type: 'reports', reports: r.reports, now: r.now });
+        const rep = await window.__sr.rpc({ type: 'route', from: [%f, %f], to: [%f, %f], mode: 'walk', when: S.leaveAt.toISOString(), profile: 'woman' });
+        return rep.reply.routes.map(x => ({ e: x.edges.join(','), m: x.meanRisk, why: x.dangerSpots.flatMap(d => d.reasons) })); }""" % (LAJ[0], LAJ[1], GIRI[0], GIRI[1]))
+    same = [x for x in ok if x['e'] == ','.join(map(str, before['edges']))]
+    # the reported street now counts as riskier for this route (or the router left it)
+    if same: assert same[0]['m'] > before['meanRisk'] + 0.001, (same[0]['m'], before['meanRisk'])
+    else: assert all(x['e'] != ','.join(map(str, before['edges'])) for x in ok)
+    affected = page.evaluate("async () => (await window.__sr.rpc({ type: 'reports', reports: (await fetch('/api/reports?bbox=76.8,28.4,77.4,28.9').then(r => r.json())).reports, now: Date.now() })).affected")
+    assert affected > 0, affected
+    ctx2.close(); ctx.close()
+
+
+@case('TC-107', 'layers: street safety colours every street in view and can be switched off')
+def tc107(b, base):
+    ctx = b.new_context(**PHONE); page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/?demo=1&t=22:00'); page.wait_for_selector('#locate.on', timeout=20000)
+    page.evaluate(f"() => window.__sr.map.jumpTo({{ center: [{LAJ[0]}, {LAJ[1]}], zoom: 15.5 }})")
+    page.wait_for_function("() => window.__sr.map.getSource('safety').serialize().data.features.length > 100", timeout=15000)
+    colours = page.evaluate("() => new Set(window.__sr.map.getSource('safety').serialize().data.features.map(f => f.properties.r >= 0.46 ? 'red' : f.properties.r >= 0.32 ? 'yellow' : 'green')).size")
+    assert colours >= 2, colours
+    page.locator('#layers-btn').click()
+    page.locator('input[data-layer=safety]').uncheck()
+    assert page.evaluate("() => window.__sr.map.getLayoutProperty('safety', 'visibility')") == 'none'
+    assert page.evaluate("() => JSON.parse(localStorage.getItem('saferaah.v1')).layers.safety") is False
+    ctx.close()
+
+
+@case('TC-108', 'navigation: leaving the route finds a new route from where you are and tells the server')
+def tc108(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 8})
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + q(CP, IG, mode='walk', toName='India Gate')); wait_routes(page)
+    page.locator('#start').click()
+    page.wait_for_function('() => window.__sr.S.journey && window.__sr.S.journey.handle', timeout=15000)
+    share = page.evaluate('() => window.__sr.S.journey.handle.shareId')
+    first = page.evaluate('() => window.__sr.S.journey.route.coords')
+    # walk the wrong way: north up Janpath, away from the route
+    for k in range(1, 7):
+        ctx.set_geolocation({'latitude': CP[1] + 0.0009 * k, 'longitude': CP[0] - 0.0012, 'accuracy': 8})
+        page.wait_for_timeout(1500)
+    page.wait_for_function(f"() => window.__sr.S.journey && JSON.stringify(window.__sr.S.journey.route.coords[0]) !== '{json.dumps(first[0]).replace(' ', '')}'", timeout=20000)
+    new0 = page.evaluate('() => window.__sr.S.journey.route.coords[0]')
+    assert abs(new0[1] - CP[1]) > 0.002, new0
+    page.wait_for_timeout(1500)
+    import urllib.request
+    sh = json.loads(urllib.request.urlopen(base + f'/api/share/{share}').read())
+    assert abs(sh['route'][0][1] - new0[1]) < 1e-6, (sh['route'][0], new0)
     ctx.close()
 
 
@@ -272,7 +430,8 @@ def main():
         with sync_playwright() as p:
             b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=GL)
             for fn, extra in [(tc90, ()), (tc91, ()), (tc92, ()), (tc93, ()), (tc94, ()), (tc96, ()), (tc97, (static_base,)),
-                              (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ())]:
+                              (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ()), (tc103, ()), (tc104, ()), (tc105, ()),
+                              (tc106, ()), (tc107, ()), (tc108, ())]:
                 if only and not any(o in fn.__name__ for o in only): continue
                 fn(b, base, *extra)
             b.close()

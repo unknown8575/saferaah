@@ -98,6 +98,8 @@ export interface RiskContext {
   profile: Profile;
   pois: Poi[];
   crowd?: Map<number, CrowdStat>;
+  /** extra risk per edge from live safety reports (see live.ts) */
+  live?: Map<number, number>;
   weights?: RiskWeights;
 }
 
@@ -166,7 +168,7 @@ export function computeRisk(g: Graph, ctx: RiskContext): RiskField {
     const env =
       (w.open * (1 - S) + w.auth * (1 - P) + w.busy * (1 - C) +
         w.lit * dark * (1 - L) + w.iso * I) / base;
-    let r = tau * env + w.traffic * T + w.crowd * U;
+    let r = tau * env + w.traffic * T + w.crowd * U + (ctx.live?.get(e) ?? 0);
     risk[e] = Math.max(0, Math.min(1, r));
   }
   return { risk, poiOpen, poiVerified, darkness: dark };

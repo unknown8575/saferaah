@@ -93,13 +93,18 @@ def new_page(b, **kw):
 
 def g_plan(b, base):
     ctx, page = new_page(b)
-    page.goto(base + '/?demo=1'); page.wait_for_selector('#f-to', timeout=20000)
-    r = Rec(page, 'plan'); r.settle(); r.frame(hold=4)
-    r.tap(page.locator('.chip[data-v="woman"]'), hold=1)
-    r.tap(page.locator('.chip[data-v="walk"]'), hold=2)
-    r.type(page.locator('#f-to'), 'India Gate')
+    page.goto(base + '/?demo=1'); page.wait_for_selector('#q', timeout=20000)
+    page.wait_for_selector('#locate.on', timeout=20000)
+    r = Rec(page, 'plan'); r.settle(); r.frame(hold=5)
+    r.tap(page.locator('.chip.cat[data-cat=police]'), hold=1)
+    page.wait_for_selector('.hit-pin', timeout=15000); r.settle(300); r.frame(hold=6)
+    r.tap(page.get_by_role('button', name='Clear'), hold=1)
+    r.type(page.locator('#q'), 'India Gate')
     page.wait_for_timeout(200); r.frame(hold=3)
-    r.tap(page.locator('.field-to .suggest li', has_text='India Gate').first, hold=2)
+    r.tap(page.locator('.searchbar .suggest li', has_text='India Gate').first, hold=2)
+    page.wait_for_function("() => document.querySelector('.pc-facts')?.textContent.includes('from you')", timeout=15000)
+    r.settle(300); r.frame(hold=6)
+    r.tap(page.locator('#directions'), hold=1)
     page.wait_for_selector('.route-card', timeout=20000)
     r.settle(); r.frame(hold=10)
     r.save(colors=128); ctx.close()
@@ -111,8 +116,9 @@ def g_routes(b, base):
     page.wait_for_selector('.route-card', timeout=20000)
     r = Rec(page, 'routes'); r.settle(); r.frame(hold=8)
     cards = page.locator('.route-card')
-    for i in range(cards.count()):
+    for i in range(1, cards.count()):
         r.tap(cards.nth(i), hold=1); r.settle(400); r.frame(hold=4)
+    r.tap(page.locator('.callout').first, hold=1); r.settle(300); r.frame(hold=3)
     r.tap(page.locator('.route-card.sel'), hold=2)
     r.settle(600); r.frame(hold=6)
     page.locator('#sheet').evaluate('e => e.scrollTo({top: 260, behavior: "instant"})'); r.frame(hold=8)
@@ -204,6 +210,7 @@ def main():
         with sync_playwright() as p:
             b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=GL)
             for fn in [g_plan, g_routes, g_journey, g_checkin, g_sos, g_review]:
+                if sys.argv[1:] and fn.__name__[2:] not in sys.argv[1:]: continue
                 if only and fn.__name__[2:] not in only: continue
                 fn(b, base)
             b.close()

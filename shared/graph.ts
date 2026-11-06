@@ -195,6 +195,42 @@ export class Graph {
     return g;
   }
 
+  /** Edges whose geometry passes within `radiusM` of a point. */
+  edgesNear(lon: number, lat: number, radiusM: number): number[] {
+    if (!this.grid) this.grid = this.buildGrid();
+    const out: number[] = [];
+    const P = this.proj;
+    for (const e of this.grid.near(lon, lat, radiusM)) {
+      const pts = this.polyline(e);
+      for (let i = 1; i < pts.length; i++) {
+        if (P.pointSegDist(lon, lat, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) <= radiusM) { out.push(e); break; }
+      }
+    }
+    return out;
+  }
+
+  /** Edges with any part inside a lon/lat box (approximate, for map overlays). */
+  edgesInBox(w: number, s: number, e: number, n: number, limit: number): number[] {
+    if (!this.grid) this.grid = this.buildGrid();
+    const cx = (w + e) / 2, cy = (s + n) / 2;
+    const r = Math.max(this.proj.dist(w, cy, e, cy), this.proj.dist(cx, s, cx, n)) / 2 + 50;
+    const a = this.a;
+    const out: number[] = [];
+    for (const ed of this.grid.near(cx, cy, r)) {
+      const u = a.edgeU[ed], v = a.edgeV[ed];
+      const x0 = Math.min(a.nodeLon[u], a.nodeLon[v]) / 1e6, x1 = Math.max(a.nodeLon[u], a.nodeLon[v]) / 1e6;
+      const y0 = Math.min(a.nodeLat[u], a.nodeLat[v]) / 1e6, y1 = Math.max(a.nodeLat[u], a.nodeLat[v]) / 1e6;
+      if (x1 < w || x0 > e || y1 < s || y0 > n) continue;
+      out.push(ed);
+    }
+    if (out.length > limit) {
+      // keep the most important roads when the view holds too many streets
+      out.sort((p, q) => a.edgeClass[p] - a.edgeClass[q]);
+      out.length = limit;
+    }
+    return out;
+  }
+
   /**
    * Snap a coordinate onto the nearest edge usable by `usable(e)`.
    * Returns the edge, the fraction of its length from u, the snapped point and distance.

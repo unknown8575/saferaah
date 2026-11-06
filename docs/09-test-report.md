@@ -60,3 +60,20 @@ Coverage grew from central Delhi (206 km²) to all of Delhi NCT (~2,700 km² inc
 | 24 | font regression | MapLibre requires `{fontstack}` in the glyph URL; a space-free path broke the style | Font stack renamed `noto` |
 
 Speed on the whole-Delhi graph (build machine): graph load 0.15 s; risk field 0.1–0.35 s; walking trips 50–170 ms; 25–30 km drives ≈ 1 s for all routes.
+
+## Map-first redesign and live layers (v1.2)
+
+The app was rebuilt to behave like Google/Apple Maps: map first with a live blue dot (accuracy circle, heading cone, locate button), a search bar over the map, tap anywhere for a place card, category chips, Directions with Your location / swap / choose-on-map, a time for each travel mode, the fastest route selected by default with per-route precautions and time labels on the map, heading-up navigation with automatic re-routing and safer-route offers, and live layers (street safety now, live reports, open places refreshed every minute, optional traffic).
+
+| # | Found by | Defect | Fix |
+|---|---|---|---|
+| 25 | user feedback | Start/destination could only be picked from the search list; no real "where I am" | Live blue dot; tap anywhere; choose on map with a centre pin; manual "I am here" when GPS is unavailable |
+| 26 | user feedback | The safest route was pre-selected, hiding the fastest | Fastest selected first; every route shows what precautions it needs; the user decides |
+| 27 | screenshot review | Shop and eatery dots cluttered the map at street zoom | Police/hospitals from zoom 13, medical stores/metro/petrol from 15, shops only from 17 |
+| 28 | screenshot review | Night basemap drew main roads in yellow, which read as "take care" next to the safety colours | Neutral lavender main roads at night |
+| 29 | screenshot review | Route time labels floated over the bottom sheet | Map placed in its own stacking layer |
+| 30 | screenshot review | Long place names pushed "Open" pills off screen in category lists | Grid columns allowed to shrink; names truncate |
+| 31 | code review | Rotated pin shapes were overwritten by the map library's marker positioning | Shapes moved into an inner element |
+| 32 | E2E TC-106 | A single unconfirmed report on a busy main road does not create a "risky stretch" (correct), so the test expected the wrong signal | Test checks the route's risk rises instead |
+
+New tests: 12 unit/API cases for live reports, precautions, mode times and re-routing (TC-110–114, TC-120–126) and 6 end-to-end cases (TC-103–108). Totals: 81 unit + API tests, 18 end-to-end cases.

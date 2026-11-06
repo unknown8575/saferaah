@@ -7,6 +7,8 @@ import { gzipSync } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { JourneyMonitor, reviewEligibility, type Fix } from '../shared/journey.ts';
 import { MODES, type Mode } from '../shared/modes.ts';
+import { REPORT_KINDS, isReportKind } from '../shared/live.ts';
+import { haversine } from '../shared/geo.ts';
 import type { LonLat } from '../shared/geo.ts';
 import { sendSms, smsConfigured } from './notify.ts';
 
@@ -163,6 +165,74 @@ export function createApp(opts: AppOptions): Server {
         for (const to of b.contacts.slice(0, 5)) if (await sendSms(String(to), b.message.slice(0, 600))) sent++;
       }
       return { ok: true, smsSent: sent };
+    },
+
+    'POST /api/journeys/([\\w-]+)/route': async (req, m) => {
+      // re-routed mid-journey: verification and review use the new route from here on
+      const b = await body(req);
+      const j = journeyFor(m[1], b.token);
+      if (!Array.isArray(b.route) || b.route.length < 2 || b.route.length > 20000 || !b.route.every(isLonLat))
+        throw new HttpError(400, 'Invalid route');
+      if (!Array.isArray(b.edges) || b.edges.length > 50000 || !b.edges.every((e: unknown) => Number.isInteger(e) && (e as number) >= 0))
+        throw new HttpError(400, 'Invalid edges');
+      if (typeof b.etaS !== 'number' || !(b.etaS > 0) || b.etaS > 6 * 3600) throw new HttpError(400, 'Invalid ETA');
+      db.prepare('UPDATE journeys SET route_json = ?, edges_json = ?, eta_s = ?, started_at = ? WHERE id = ?')
+        .run(JSON.stringify(b.route), JSON.stringify(b.edges), b.etaS, now(), j.id);
+      db.prepare('DELETE FROM fixes WHERE journey_id = ? AND t < ?').run(j.id, now() - 60000);
+      return { ok: true };
+    },
+
+    'POST /api/reports': async (req) => {
+      const dev = device(req);
+      const b = await body(req);
+      if (!isReportKind(b.kind)) throw new HttpError(400, 'Unknown report type');
+      if (!isLonLat([b.lon, b.lat]) || !isLonLat([b.at?.lon, b.at?.lat])) throw new HttpError(400, 'Location needed');
+      const acc = Math.min(200, Math.max(0, Number(b.at.acc) || 0));
+      // you can only report a spot you are near
+      if (haversine(b.lon, b.lat, b.at.lon, b.at.lat) > 300 + acc) throw new HttpError(403, 'Report only places near where you are');
+      const t = now();
+      const recent = (db.prepare('SELECT COUNT(*) AS n FROM reports WHERE device = ? AND created_at > ?').get(dev, t - 3600000) as { n: number }).n;
+      if (recent >= 6) throw new HttpError(429, 'Too many reports in the last hour');
+      // the same problem already reported close by counts as a confirmation
+      const near = (db.prepare('SELECT id, lon, lat FROM reports WHERE kind = ? AND expires_at > ? AND lon BETWEEN ? AND ? AND lat BETWEEN ? AND ?')
+        .all(b.kind, t, b.lon - 0.001, b.lon + 0.001, b.lat - 0.001, b.lat + 0.001) as { id: string; lon: number; lat: number }[])
+        .find((r) => haversine(r.lon, r.lat, b.lon, b.lat) <= 80);
+      let id = near?.id;
+      if (!id) {
+        id = randomUUID();
+        db.prepare('INSERT INTO reports (id, kind, lon, lat, device, created_at, expires_at) VALUES (?,?,?,?,?,?,?)')
+          .run(id, b.kind, b.lon, b.lat, dev, t, t + REPORT_KINDS[b.kind as keyof typeof REPORT_KINDS].hours * 3600000);
+      }
+      db.prepare(`INSERT INTO report_votes (report_id, device, still, at) VALUES (?,?,1,?)
+        ON CONFLICT(report_id, device) DO UPDATE SET still = 1, at = excluded.at`).run(id, dev, t);
+      return { ok: true, id, merged: !!near };
+    },
+
+    'POST /api/reports/([\\w-]+)/vote': async (req, m) => {
+      const dev = device(req);
+      rateLimit('rv:' + dev);
+      const b = await body(req);
+      const r = db.prepare('SELECT * FROM reports WHERE id = ?').get(m[1]) as any;
+      if (!r || r.expires_at <= now()) throw new HttpError(404, 'Report has expired');
+      if (typeof b.still !== 'boolean') throw new HttpError(400, 'Say whether it is still there');
+      if (!isLonLat([b.at?.lon, b.at?.lat]) || haversine(r.lon, r.lat, b.at.lon, b.at.lat) > 500 + Math.min(200, Number(b.at.acc) || 0))
+        throw new HttpError(403, 'Only people near the spot can confirm it');
+      db.prepare(`INSERT INTO report_votes (report_id, device, still, at) VALUES (?,?,?,?)
+        ON CONFLICT(report_id, device) DO UPDATE SET still = excluded.still, at = excluded.at`).run(r.id, dev, b.still ? 1 : 0, now());
+      return { ok: true };
+    },
+
+    'GET /api/reports': async (req) => {
+      const q = new URL(req.url ?? '', 'http://x').searchParams.get('bbox') ?? '';
+      const [w, s, e, n] = q.split(',').map(Number);
+      if (![w, s, e, n].every(Number.isFinite) || e - w > 2 || n - s > 2) throw new HttpError(400, 'bbox=w,s,e,n needed (max 2°)');
+      const t = now();
+      const rows = db.prepare(`SELECT r.id, r.kind, r.lon, r.lat, r.created_at AS createdAt, r.expires_at AS expiresAt,
+          COALESCE(SUM(v.still = 1), 0) AS confirms, COALESCE(SUM(v.still = 0), 0) AS dismisses
+        FROM reports r LEFT JOIN report_votes v ON v.report_id = r.id
+        WHERE r.expires_at > ? AND r.lon BETWEEN ? AND ? AND r.lat BETWEEN ? AND ?
+        GROUP BY r.id ORDER BY r.created_at DESC LIMIT 500`).all(t, w, e, s, n) as any[];
+      return { now: t, reports: rows.filter((r) => r.dismisses <= r.confirms) };
     },
 
     'POST /api/reviews': async (req) => {

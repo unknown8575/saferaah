@@ -51,6 +51,23 @@ export function openDb(path: string): DatabaseSync {
       PRIMARY KEY (graph_version, edge, device)
     );
     CREATE INDEX IF NOT EXISTS edge_votes_v ON edge_votes(graph_version, edge);
+    -- live safety reports (expire after a few hours)
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      lon REAL NOT NULL, lat REAL NOT NULL,
+      device TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS reports_exp ON reports(expires_at);
+    CREATE TABLE IF NOT EXISTS report_votes (
+      report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      device TEXT NOT NULL,
+      still INTEGER NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (report_id, device)
+    );
   `);
   // migrate older databases
   const cols = (db.prepare("PRAGMA table_info(journeys)").all() as { name: string }[]).map((c) => c.name);

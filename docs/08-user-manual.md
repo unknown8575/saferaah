@@ -1,30 +1,36 @@
 # SafeRaah — User Manual
 
-The same six animations are inside the app under **?** (Help).
+SafeRaah works like the maps app you already know: a blue dot for where you are, a search bar, tap any place, **Directions**. What is different is the routes: for every trip you see the fastest route first and up to three safer ones, each coloured by how safe it is *right now*, with the precautions it needs. You decide which one to take.
 
-## 1. Plan a trip
-![Plan a trip](../web/public/help/plan.gif)
+The same six animations are inside the app under **☰ → How to use SafeRaah**.
 
-1. Choose **who is travelling** (Woman, Child, Anyone) and **how** (Walk, Scooty/Bike, Auto, Car/Cab).
-2. Type where you are going. Search works without internet: metro stations, police stations, hospitals, markets, streets.
-   You can also **long-press the map** to drop the destination.
-3. The start is your location. To start somewhere else, tap the start box.
-4. **When?** Leave it on *Now*, or pick a time to plan a later trip — the map turns dark for night trips.
+## 1. Find a place
+![Find a place](../web/public/help/plan.gif)
 
-## 2. Choose a route
+* **Your blue dot** shows where you are. The light-blue circle is how accurate GPS is; the cone shows which way you face. Tap **◎** (bottom right) to jump back to yourself.
+* **Search here** finds metro stations, police stations, hospitals, markets, landmarks and streets — it works without internet.
+* **Tap anywhere on the map** to drop a pin. The card shows the place or street, how far it is from you, whether it is open now, and how safe that street is right now.
+* **Category chips** under the search bar: Police, Hospitals, Medical stores, Metro, Petrol pumps — the nearest ones, with **Open / Likely open / Closed**.
+* No GPS (location blocked, or indoors)? SafeRaah tells you, and **Mark where I am** lets you put yourself on the map by moving the pin.
+
+## 2. Directions: choose a route
 ![Choose a route](../web/public/help/routes.gif)
 
-* Up to four routes, from the **fastest** to the **safest**. Each shows time, distance, a colour, a label and an icon:
+* On a place card tap **➤ Directions**. The start is **Your location**; tap it to search another start or **Choose on map**. **⇅** swaps start and destination.
+* The tabs show the time for each way of travelling: 🚶‍♀️ walk, 🛵 scooty/bike, 🛺 auto, 🚗 car/cab. Pick yours; SafeRaah may suggest another (for example an auto late at night).
+* Pick **who is travelling** (Woman, Child, Anyone) and **when** (Leave now, or a later time — the map turns dark for night trips).
+* Routes are listed **fastest first**, and the fastest is selected. Each shows time, distance, a colour and a one-line precaution:
   🟥 **High risk** · 🔴 **Unsafe** · 🟡 **Take care** · 🟢 **Low risk**.
-* Colours are honest: in the daytime on busy roads, all routes may be green. Late at night even the safest walk may be red — then SafeRaah suggests an auto or cab instead.
-* Red **!** markers on the map are risky stretches. Tap one to see why (park, nothing open, far from police…).
-* Tap a route once to see it on the map; tap it again (or **Why this colour?**) for details.
+* Every route also has a label on the map with its time; tap a label or a line to select that route.
+* **Precautions & steps** lists exactly what to watch for: the risky stretches by street name and why (park, nothing open, far from police, reported by travellers), whether police posts are on the way, and turn-by-turn directions.
 
 ## 3. Start the journey
 ![Start the journey](../web/public/help/journey.gif)
 
-* In details, pick who should get your **arrival message**, then tap **Start journey**.
-* The top bar shows the next turn. **Share live trip** sends a link your family can open to watch your position (no app needed).
+* Pick who should get your **arrival message**, then tap **▶ Start**.
+* The map turns to face your direction and follows you. The top banner shows the next turn, and a yellow or red strip warns you while you are on a quieter stretch.
+* Take a different turn and SafeRaah **finds a new route from where you are**, keeping your choice (fastest or safest). If a clearly **safer route** appears on the way (shops closing, night falling, a new report), it offers it — you can switch or keep yours.
+* **Share live** sends a link your family can open to watch your position (no app needed).
 
 ## 4. If you stop for too long
 ![Check-in](../web/public/help/checkin.gif)
@@ -45,11 +51,14 @@ The same six animations are inside the app under **?** (Help).
 * When you enter a small circle around the destination (10 m, wider if GPS is weak), you **arrive**. Tap **Tell … you reached** to send the message.
 * Rate how safe the streets felt and add quick tags. Reviews are accepted only from **verified trips** — you must have actually travelled at least 80% of the route — and a street changes colour only after **5 different travellers** warn about it (10 to mark it safer).
 
-## Contacts and settings (👥)
-Add up to 5 trusted people. They stay on your phone. *Simulate my movement* lets you try the app without walking.
+## Live on the map
+* **⚠ Report** (right side): No street lights, Deserted street, Harassment / eve-teasing, Drunk group, Someone following people, Aggressive stray dogs, or Police patrol here. You can only report where you are. Reports are anonymous, show as pins for everyone, and expire after 2–12 hours. Routes for everyone avoid the spot until then.
+* Tap a report pin to say **Still there** or **Gone**. A report counts fully once a second traveller confirms it, and disappears when more people say it is gone.
+* **Layers** (stacked squares): **Street safety now** colours every street in view (zoom in) by how safe it is this hour; **Live reports**; **Safe places** (filled = open now).
+* Open and closed places refresh every minute.
 
-## Safe places near me (🏥)
-Police stations, hospitals, medical stores, clinics, metro stations and petrol pumps within 1.5 km, with **Open / Likely open / Closed** for the chosen time, and a **Go** button for a safe route there.
+## Menu (☰)
+Safe places near me, Trusted contacts & settings (up to 5 people, kept on your phone; *Simulate my movement* to try without walking), Map layers, this guide, and one-tap calls to 112 and 1091.
 
 ## Good to know
 * Coverage: all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad. Map data © OpenStreetMap contributors.

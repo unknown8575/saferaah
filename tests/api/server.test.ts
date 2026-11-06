@@ -195,3 +195,67 @@ describe('input safety (NFR-5)', () => {
     expect(codes).toContain(429);
   });
 });
+
+describe('live safety reports', () => {
+  const spot = TRIPS.lajpatSoami.from;
+  const at = (dx = 0, acc = 10) => ({ lon: spot[0] + dx, lat: spot[1], acc });
+  const DEV_C = 'device-cccccccccccccccc', DEV_D = 'device-dddddddddddddddd';
+  it('TC-110 a traveller near the spot can report; far away is refused', async () => {
+    const far = await call('POST', '/api/reports', { kind: 'dark', lon: spot[0], lat: spot[1], at: at(0.01) }, DEV_C);
+    expect(far.status).toBe(403);
+    const bad = await call('POST', '/api/reports', { kind: 'aliens', lon: spot[0], lat: spot[1], at: at() }, DEV_C);
+    expect(bad.status).toBe(400);
+    const ok = await call('POST', '/api/reports', { kind: 'dark', lon: spot[0], lat: spot[1], at: at() }, DEV_C);
+    expect(ok.status).toBe(200);
+    expect(ok.body.merged).toBe(false);
+    const list = await call('GET', `/api/reports?bbox=${spot[0] - 0.01},${spot[1] - 0.01},${spot[0] + 0.01},${spot[1] + 0.01}`, undefined, null);
+    const r = list.body.reports.find((x: any) => x.id === ok.body.id);
+    expect(r).toMatchObject({ kind: 'dark', confirms: 1, dismisses: 0 });
+    expect(r.expiresAt - r.createdAt).toBe(12 * 3600000);
+  });
+  it('TC-111 the same problem reported close by merges into one report', async () => {
+    const a = await call('POST', '/api/reports', { kind: 'drunk', lon: spot[0], lat: spot[1], at: at() }, DEV_C);
+    const b = await call('POST', '/api/reports', { kind: 'drunk', lon: spot[0] + 0.0004, lat: spot[1], at: at(0.0004) }, DEV_D);
+    expect(b.body.merged).toBe(true);
+    expect(b.body.id).toBe(a.body.id);
+    const list = await call('GET', `/api/reports?bbox=${spot[0] - 0.01},${spot[1] - 0.01},${spot[0] + 0.01},${spot[1] + 0.01}`, undefined, null);
+    expect(list.body.reports.filter((x: any) => x.kind === 'drunk')).toHaveLength(1);
+    expect(list.body.reports.find((x: any) => x.kind === 'drunk').confirms).toBe(2);
+  });
+  it('TC-112 "gone" votes hide a report once they outnumber confirmations; voters must be near', async () => {
+    const a = await call('POST', '/api/reports', { kind: 'dogs', lon: spot[0], lat: spot[1], at: at() }, DEV_C);
+    const far = await call('POST', `/api/reports/${a.body.id}/vote`, { still: false, at: at(0.02) }, DEV_D);
+    expect(far.status).toBe(403);
+    expect((await call('POST', `/api/reports/${a.body.id}/vote`, { still: 'no', at: at() }, DEV_D)).status).toBe(400);
+    expect((await call('POST', `/api/reports/${a.body.id}/vote`, { still: false, at: at() }, DEV_D)).status).toBe(200);
+    expect((await call('POST', `/api/reports/${a.body.id}/vote`, { still: false, at: at() }, DEV_A)).status).toBe(200);
+    const list = await call('GET', `/api/reports?bbox=${spot[0] - 0.01},${spot[1] - 0.01},${spot[0] + 0.01},${spot[1] + 0.01}`, undefined, null);
+    expect(list.body.reports.find((x: any) => x.id === a.body.id)).toBeUndefined();
+  });
+  it('TC-113 reports expire, and one device cannot flood', async () => {
+    const DEV_E = 'device-eeeeeeeeeeeeeeee';
+    const codes: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const lon = spot[0] + i * 0.0015;
+      codes.push((await call('POST', '/api/reports', { kind: 'followed', lon, lat: spot[1], at: { lon, lat: spot[1], acc: 5 } }, DEV_E)).status);
+    }
+    expect(codes.filter((c) => c === 200)).toHaveLength(6);
+    expect(codes).toContain(429);
+    clock += 3 * 3600000; // "followed" lasts 2 h
+    const list = await call('GET', `/api/reports?bbox=${spot[0] - 0.02},${spot[1] - 0.02},${spot[0] + 0.03},${spot[1] + 0.02}`, undefined, null);
+    expect(list.body.reports.filter((x: any) => x.kind === 'followed')).toHaveLength(0);
+    expect((await call('GET', '/api/reports?bbox=1,2', undefined, null)).status).toBe(400);
+  });
+  it('TC-114 a re-route mid-journey replaces the route used for verification', async () => {
+    const j = await startJourney();
+    const alt = plan.routes[plan.routes.length - 1];
+    const bad = await call('POST', `/api/journeys/${j.id}/route`, { token: 'wrong', route: alt.coords, edges: alt.edges, etaS: alt.timeS });
+    expect(bad.status).toBe(403);
+    const ok = await call('POST', `/api/journeys/${j.id}/route`, { token: j.token, route: alt.coords, edges: alt.edges, etaS: alt.timeS });
+    expect(ok.status).toBe(200);
+    const sh = await call('GET', `/api/share/${j.shareId}`, undefined, null);
+    expect(sh.body.route).toEqual(alt.coords);
+    expect(sh.body.etaS).toBe(alt.timeS);
+    expect((await call('POST', `/api/journeys/${j.id}/route`, { token: j.token, route: [[1, 2]], edges: [], etaS: 10 })).status).toBe(400);
+  });
+});

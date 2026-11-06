@@ -40,7 +40,7 @@ export function tierOf(meanRisk: number, worstStretch: number): Tier {
 
 export interface Snapped { edge: number; t: number; lon: number; lat: number; distM: number }
 
-export interface DangerSpot { lon: number; lat: number; lengthM: number; reasons: string[] }
+export interface DangerSpot { lon: number; lat: number; lengthM: number; reasons: string[]; street: string }
 
 export interface RouteResult {
   alpha: number;
@@ -285,6 +285,17 @@ export class Router {
     return { coords, segEdge };
   }
 
+  /** Fastest travel time only (for the travel-mode tabs). */
+  fastestTime(from: LonLat, to: LonLat, mode: Mode, when: Date, profile: string): number | null {
+    const g = this.g;
+    const usable = this.usableFor(mode);
+    const s = g.snap(from[0], from[1], usable), t = g.snap(to[0], to[1], usable);
+    if (!s || !t) return null;
+    const times = this.edgeTimes(mode, when, profile);
+    const r = this.astar(times, mode, s, t, usable);
+    return r ? r.cost : null;
+  }
+
   /** Main entry point: the up-to-four tiered routes. */
   route(req: RouteRequest, risk?: RiskField): RouteResponse {
     const t0 = performance.now();
@@ -419,6 +430,7 @@ export class Router {
     const havenSet = new Set<number>();
     const reasonsOf = (e: number): string[] => {
       const r: string[] = [];
+      if ((req.ctx.live?.get(e) ?? 0) > 0.1) r.push('reported unsafe by travellers recently');
       const cls = ROAD_CLASSES[g.a.edgeClass[e]];
       const gb = g.a.edgeGreen[e];
       if (gb & 1) r.push('through a park');
@@ -463,8 +475,15 @@ export class Router {
         const reasons = new Set<string>();
         for (let k = runStart; k <= endIdx; k++) for (const r of reasonsOf(perEdge[k].e)) reasons.add(r);
         const [dlon, dlat] = g.pointAt(e, 0.5);
+        // the street most of this stretch runs along
+        const byName = new Map<string, number>();
+        for (let k = runStart; k <= endIdx; k++) {
+          const nm = g.name(perEdge[k].e);
+          if (nm) byName.set(nm, (byName.get(nm) ?? 0) + perEdge[k].len);
+        }
+        const street = [...byName].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
         dangerSpots.push({
-          lon: dlon, lat: dlat,
+          lon: dlon, lat: dlat, street,
           lengthM: Math.round(runLen), reasons: [...reasons].slice(0, 3),
         });
       }

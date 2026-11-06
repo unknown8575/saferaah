@@ -1,23 +1,25 @@
 import './styles.css';
 import { h, clear, fmtDuration, fmtDist } from './dom.ts';
-import { SafeMap, loadBasemap } from './map.ts';
+import { SafeMap, loadBasemap, hasTraffic } from './map.ts';
 import { PlaceSearch, TYPE_ICON, type Entry, type Hit } from './search.ts';
 import { load, save, normalisePhone, type Contact } from './store.ts';
-import { api, checkServer, isOnline, serverSms, type JourneyHandle } from './api.ts';
+import { api, live, checkServer, isOnline, serverSms, initPreviewStore, liveAvailable, livePreview, type JourneyHandle } from './api.ts';
 import { gpsSource, simulatedSource, type PositionSource } from './location.ts';
 import { smsLink, whatsappLink, telLink, shareUrl, arrivalText, startText, sosText, HELPLINES, notifyPhones } from './messages.ts';
 import type { RouteReply, WorkerRoute } from './worker.ts';
-import { TIER_INFO } from '../../shared/router.ts';
+import { TIER_INFO, tierOf, type Tier } from '../../shared/router.ts';
 import { CAT_INFO, type Poi, type PoiCat } from '../../shared/places.ts';
 import { MODE_INFO, MODES, WALK_KMH, type Mode } from '../../shared/modes.ts';
 import { JourneyMonitor, type Fix, type JourneyEvent } from '../../shared/journey.ts';
+import { REPORT_KINDS, type LiveReport, type ReportKind } from '../../shared/live.ts';
 import { darkness, istTime, IST_OFFSET_MIN } from '../../shared/time.ts';
+import { haversine, type LonLat } from '../../shared/geo.ts';
 import type { Profile } from '../../shared/risk.ts';
-import type { LonLat } from '../../shared/geo.ts';
 
 const BASE = import.meta.env.BASE_URL;
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo');
+const DEMO_ME: LonLat = [77.2197, 28.6328]; // Rajiv Chowk
 
 // ---------- worker RPC ----------
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -35,53 +37,96 @@ function rpc<T = any>(msg: Record<string, unknown>): Promise<T> {
 }
 
 // ---------- state ----------
-interface Place { lonlat: LonLat; label: string; mine?: boolean }
+interface Place {
+  lonlat: LonLat; label: string; sub?: string; poi?: number; kind?: string;
+  street?: string; risk?: number | null; mine?: boolean;
+}
+type View = 'home' | 'place' | 'category' | 'directions' | 'details' | 'pick' | 'journey' | 'arrived' | 'contacts' | 'help' | 'track';
+type LocStatus = 'idle' | 'asking' | 'on' | 'denied' | 'unavailable';
+type Pref = 'fastest' | 'safest' | 'balanced';
+
 const S = {
   settings: load(),
   version: 'dev',
   snapshot: '',
-  bbox: [77.17, 28.515, 77.285, 28.68] as [number, number, number, number],
+  bbox: [76.83, 28.40, 77.35, 28.89] as [number, number, number, number],
   onewayKnown: true,
-  from: null as Place | null,
+  view: 'home' as View,
+  loc: { status: 'idle' as LocStatus, fix: null as Fix | null, heading: null as number | null },
+  manualMe: null as LonLat | null,
+  follow: false,
+  place: null as Place | null,
+  category: null as null | { key: string; title: string; items: (Poi & { distM: number; open: boolean; verified: boolean })[] },
+  from: null as Place | null, // null = your location
   to: null as Place | null,
   leaveAt: null as Date | null, // null = now
   reply: null as RouteReply | null,
   selected: 0,
-  view: 'plan' as 'plan' | 'routes' | 'details' | 'journey' | 'arrived' | 'contacts' | 'places' | 'help' | 'track',
-  myPos: null as Fix | null,
+  userPicked: false,
+  modeTimes: {} as Partial<Record<Mode, number | null>>,
+  pick: null as null | { target: 'from' | 'to' | 'me'; back: View },
+  myPos: null as Fix | null, // position used during a journey (real or simulated)
   pois: [] as Poi[],
+  reports: [] as LiveReport[],
+  reportsAt: 0,
   journey: null as null | {
-    route: WorkerRoute; monitor: JourneyMonitor; source: PositionSource; handle: JourneyHandle | null;
+    route: WorkerRoute; monitor: JourneyMonitor; source: PositionSource; handle: JourneyHandle | null; pref: Pref;
     pendingFixes: Fix[]; dest: Place; startedAt: number; clock: () => number; offRoute: boolean;
     tickTimer: ReturnType<typeof setInterval>; pushTimer: ReturnType<typeof setInterval>; result?: any; sos?: boolean;
+    rerouting?: boolean; lastReroute: number; lastSaferCheck: number; better: WorkerRoute | null; dismissedBetter?: boolean;
   },
-  busy: false,
 };
 (window as any).__sr = { S, rpc };
 
 const now = () => S.leaveAt ?? new Date();
 const inCoverage = (p: LonLat) => p[0] >= S.bbox[0] && p[0] <= S.bbox[2] && p[1] >= S.bbox[1] && p[1] <= S.bbox[3];
+/** Where the user is: live GPS (inside Delhi) or the point they marked themselves. */
+function myLonLat(): LonLat | null {
+  const f = S.loc.fix;
+  if (f && inCoverage([f.lon, f.lat])) return [f.lon, f.lat];
+  return S.manualMe;
+}
+const myAcc = () => (S.loc.fix && inCoverage([S.loc.fix.lon, S.loc.fix.lat]) ? S.loc.fix.acc : 50);
+const fromLonLat = () => S.from?.lonlat ?? myLonLat();
+const fromLabel = () => S.from?.label ?? 'Your location';
 function clockText(d: Date): string {
   const m = istTime(d).minutes;
   const hh = Math.floor(m / 60), mm = m % 60;
   return `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, '0')} ${hh < 12 ? 'am' : 'pm'}`;
 }
+const TIER_RANK: Record<Tier, number> = { green: 0, yellow: 1, red: 2, darkred: 3 };
+const tierIcon = (t: Tier) => (t === 'green' ? '✓' : t === 'yellow' ? '!' : '⚠');
 
 // ---------- layout ----------
 const app = document.getElementById('app')!;
 const mapEl = h('div', { id: 'map', role: 'application', 'aria-label': 'Map' });
+const top = h('header', { id: 'top' });
+const fabs = h('div', { id: 'fabs' });
 const sheet = h('section', { id: 'sheet', 'aria-live': 'polite' });
-const topbar = h('header', { id: 'topbar' });
+const crosshair = h('div', { id: 'crosshair', hidden: true, 'aria-hidden': 'true' }, h('div', { class: 'pin pin-to' }));
 const sosBtn = h('button', { id: 'sos', class: 'sos', 'aria-label': 'SOS emergency', on: { click: () => openSos() } }, 'SOS');
 const toastEl = h('div', { id: 'toast', role: 'status' });
 const modal = h('div', { id: 'modal', hidden: true });
-app.append(mapEl, topbar, sheet, sosBtn, toastEl, modal);
-// keep the SOS button just above the sheet, whatever its current height
-new ResizeObserver(() => {
-  const h = sheet.offsetParent ? sheet.getBoundingClientRect().height : 0;
-  // if the sheet covers most of the screen, keep SOS reachable over the map's top area
-  document.documentElement.style.setProperty('--sheet-h', `${Math.min(h, window.innerHeight - 170)}px`);
-}).observe(sheet);
+app.append(mapEl, top, fabs, sheet, crosshair, sosBtn, toastEl, modal);
+// keep the floating buttons just above the sheet, whatever its current height
+const syncSizes = () => {
+  const sh = sheet.offsetParent && !sheet.hidden ? sheet.getBoundingClientRect().height : 0;
+  const th = top.offsetParent ? top.getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty('--sheet-h', `${Math.min(sh, window.innerHeight - 170)}px`);
+  document.documentElement.style.setProperty('--top-h', `${th}px`);
+};
+new ResizeObserver(syncSizes).observe(sheet);
+// tap the grip (or drag it up) to see more of the sheet, like a map app's bottom panel
+sheet.addEventListener('click', (e) => { if ((e.target as HTMLElement).classList.contains('grip')) sheet.classList.toggle('expanded'); });
+let gripY: number | null = null;
+sheet.addEventListener('touchstart', (e) => { gripY = (e.target as HTMLElement).classList.contains('grip') ? e.touches[0].clientY : null; }, { passive: true });
+sheet.addEventListener('touchend', (e) => {
+  if (gripY == null) return;
+  const dy = e.changedTouches[0].clientY - gripY;
+  if (dy < -30) sheet.classList.add('expanded'); else if (dy > 30) sheet.classList.remove('expanded');
+  gripY = null;
+});
+new ResizeObserver(syncSizes).observe(top);
 
 let toastTimer: ReturnType<typeof setTimeout>;
 function toast(msg: string, ms = 3500) {
@@ -93,9 +138,22 @@ function toast(msg: string, ms = 3500) {
 
 let smap: SafeMap;
 let search: PlaceSearch;
+let named: { name: string; lon: number; lat: number; type: string }[] = [];
+const wide = () => window.innerWidth >= 860;
+
+function setView(v: View) {
+  S.view = v;
+  document.body.dataset.view = v;
+  sheet.className = `v-${v}`; // also collapses an expanded sheet
+  crosshair.hidden = v !== 'pick';
+  sosBtn.hidden = v === 'track';
+  smap?.dimSafety(['directions', 'details', 'journey'].includes(v));
+  renderFabs();
+}
 
 // ---------- boot ----------
 async function boot() {
+  setView('home');
   clear(sheet, h('div', { class: 'loading' }, h('div', { class: 'spinner' }), h('p', null, 'Loading the map of Delhi…')));
   try {
     const [ver, basemap, searchEntries] = await Promise.all([
@@ -106,25 +164,29 @@ async function boot() {
     S.version = ver.version;
     S.snapshot = ver.snapshot ?? '';
     search = new PlaceSearch(searchEntries);
+    named = searchEntries.filter((e) => e[3] !== 'street').map(([name, lon, lat, type]) => ({ name, lon, lat, type }));
     smap = new SafeMap(mapEl, BASE, basemap.bounds);
     (window as any).__sr.map = smap.map;
     smap.map.on('error', (e: any) => console.warn('map error', e?.error?.message ?? e));
-    smap.onRouteClick((i) => selectRoute(i));
-    setupMapPicking();
+    smap.onRouteClick((i) => selectRoute(i, true));
+    smap.onPoiClick((id) => { if (['home', 'place', 'category'].includes(S.view)) openPoi(id); });
+    setupMapGestures();
     const ready = await rpc<{ meta: any }>({ type: 'init', base: new URL(BASE, location.href).href, graphParts: ver.graphParts });
     S.bbox = ready.meta.bbox; S.onewayKnown = ready.meta.onewayKnown;
     S.pois = await fetch(BASE + 'data/pois.json').then((r) => r.json());
+    const L = S.settings.layers;
+    smap.setLayerVisible('safety', L.safety); smap.setLayerVisible('pois', L.pois); smap.setLayerVisible('traffic', L.traffic && hasTraffic());
     refreshPois();
     checkServer().then(async (ok) => {
-      if (!ok) return;
+      if (!ok) { if (await initPreviewStore()) refreshReports(true); return; }
       try { const c = await api.crowd(S.version); await rpc({ type: 'crowd', stats: c.stats }); } catch { /* crowd data optional */ }
+      refreshReports();
     });
   } catch (err) {
     clear(sheet, h('div', { class: 'pad' }, h('h2', null, 'The map could not load'),
       h('p', null, String((err as Error).message)), h('button', { class: 'btn primary', on: { click: () => location.reload() } }, 'Try again')));
     return;
   }
-  renderTopbar();
   const track = params.get('track');
   if (track) { showTrack(track); return; }
   if (DEMO) save({ simulate: true });
@@ -139,8 +201,11 @@ async function boot() {
   if (pr && ['woman', 'child', 'general'].includes(pr)) save({ profile: pr });
   S.settings = load();
   applyTheme();
-  if (S.from && S.to) { await planRoutes(); return; }
-  showPlan();
+  startLocating();
+  setInterval(() => { refreshPois(); applyTheme(); if (S.view === 'home') renderHome(); }, 60000);
+  setInterval(() => refreshReports(), 60000);
+  if (S.to) { openDirections(); return; }
+  goHome();
   if (!S.settings.seenIntro && !DEMO) showIntro();
 }
 
@@ -159,170 +224,515 @@ function applyTheme() {
   smap?.setTheme(night ? 'night' : 'day');
 }
 
+/** last open/closed snapshot of every place, for place cards */
+let lastOpen: { open: Uint8Array; verified: Uint8Array } | null = null;
 async function refreshPois() {
-  const r = await rpc<{ open: Uint8Array }>({ type: 'open', when: now().toISOString() });
+  const r = await rpc<{ open: Uint8Array; verified: Uint8Array }>({ type: 'open', when: now().toISOString() });
+  lastOpen = r;
   smap.setPois(S.pois, r.open);
+  refreshSafety();
 }
 
-// ---------- top bar ----------
-function renderTopbar() {
-  clear(topbar,
-    h('div', { class: 'brand', 'aria-label': 'SafeRaah' }, h('span', { class: 'logo', 'aria-hidden': 'true' }), 'SafeRaah'),
-    h('nav', null,
-      h('button', { class: 'icon-btn', 'aria-label': 'Safe places near me', title: 'Safe places near me', on: { click: () => showPlaces() } }, '🏥'),
-      h('button', { class: 'icon-btn', 'aria-label': 'Contacts and settings', title: 'Contacts and settings', on: { click: () => showContacts() } }, '👥'),
-      h('button', { class: 'icon-btn', 'aria-label': 'Help', title: 'Help', on: { click: () => showHelp() } }, '?'),
-    ),
-  );
-}
-
-// ---------- plan ----------
-let picking: 'from' | 'to' | null = null;
-function setupMapPicking() {
-  const pickAt = (lngLat: { lng: number; lat: number }, which: 'from' | 'to') => {
-    const p: LonLat = [+lngLat.lng.toFixed(6), +lngLat.lat.toFixed(6)];
-    if (!inCoverage(p)) { toast('That point is outside the area this map covers (Delhi NCT).'); return; }
-    const label = nearestLabel(p);
-    if (which === 'from') S.from = { lonlat: p, label }; else S.to = { lonlat: p, label };
-    picking = null;
-    document.body.classList.remove('picking');
-    afterPlaceChange();
+// ---------- your location (blue dot) ----------
+let watchId: number | null = null;
+function startLocating() {
+  if (DEMO) {
+    S.loc = { status: 'on', fix: { lon: DEMO_ME[0], lat: DEMO_ME[1], acc: 12, t: Date.now() }, heading: null };
+    drawMe();
+    return;
+  }
+  if (!('geolocation' in navigator)) { S.loc.status = 'unavailable'; return; }
+  if (watchId !== null) return;
+  S.loc.status = 'asking';
+  watchId = navigator.geolocation.watchPosition((p) => {
+    const first = !S.loc.fix;
+    const moving = (p.coords.speed ?? 0) > 0.8 && p.coords.heading != null && !Number.isNaN(p.coords.heading);
+    S.loc = { status: 'on', fix: { lon: p.coords.longitude, lat: p.coords.latitude, acc: p.coords.accuracy, t: p.timestamp || Date.now() },
+      heading: moving ? p.coords.heading : S.loc.heading };
+    if (!S.journey) drawMe();
+    if (first) {
+      const me = myLonLat();
+      if (me && S.view === 'home' && !S.follow) smap.map.easeTo({ center: me, zoom: Math.max(smap.map.getZoom(), 15), duration: 800 });
+      if (S.view === 'home') renderHome();
+      renderFabs();
+      if (S.view === 'directions' && !S.from && !S.reply) planRoutes();
+    }
+    if (S.follow && !S.journey) smap.map.easeTo({ center: [p.coords.longitude, p.coords.latitude], duration: 500 });
+  }, (e) => {
+    if (e.code === 1) { S.loc.status = 'denied'; if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null; }
+    else if (!S.loc.fix) S.loc.status = 'unavailable';
+    if (S.view === 'home') renderHome();
+    renderFabs();
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  // compass heading when standing still (phones only)
+  const onOrient = (ev: DeviceOrientationEvent & { webkitCompassHeading?: number }) => {
+    const hd = ev.webkitCompassHeading ?? ((ev as any).absolute && ev.alpha != null ? 360 - ev.alpha : null);
+    if (hd == null || S.journey) return;
+    S.loc.heading = hd;
+    drawMe();
   };
-  smap.map.on('click', (e) => { if (picking) pickAt(e.lngLat, picking); });
-  const canPick = () => S.view === 'plan' || S.view === 'routes';
-  smap.map.on('contextmenu', (e) => { if (canPick()) pickAt(e.lngLat, 'to'); });
+  window.addEventListener('deviceorientationabsolute' as 'deviceorientation', onOrient as EventListener);
+  window.addEventListener('deviceorientation', onOrient as EventListener);
+}
+
+function drawMe() {
+  const f = S.loc.fix;
+  if (f) smap.setMe([f.lon, f.lat], f.acc, S.loc.heading, false);
+  else if (S.manualMe) smap.setMe(S.manualMe, 0, null, true);
+  else smap.setMe(undefined);
+}
+
+function locate() {
+  (DeviceOrientationEvent as any)?.requestPermission?.().catch(() => {});
+  const me = myLonLat();
+  if (S.loc.fix && !me) { toast('You seem to be outside Delhi. This map covers Delhi NCT only.', 5000); smap.map.flyTo({ center: [S.loc.fix.lon, S.loc.fix.lat], zoom: 13 }); return; }
+  if (me) {
+    S.follow = !!S.loc.fix;
+    smap.map.flyTo({ center: me, zoom: Math.max(16, smap.map.getZoom()), bearing: 0, duration: 700 });
+    renderFabs();
+    return;
+  }
+  if (S.loc.status === 'idle' || S.loc.status === 'unavailable') { startLocating(); toast('Finding your location…'); }
+  explainNoLocation();
+}
+
+function explainNoLocation() {
+  openModal(h('div', { class: 'modal-card' },
+    h('h2', null, S.loc.status === 'denied' ? 'Location is blocked' : 'Finding your location'),
+    h('p', null, S.loc.status === 'denied'
+      ? 'SafeRaah is not allowed to see your location. On your phone, allow location for this app or website in Settings, then tap the locate button again.'
+      : 'We are still waiting for GPS. Step near a window or open area.'),
+    h('p', null, 'Meanwhile you can mark where you are yourself: move the map so the pin is on your spot.'),
+    h('button', { class: 'btn primary wide', id: 'mark-me', on: { click: () => { closeModal(); startPick('me'); } } }, 'Mark where I am on the map'),
+    h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Close'),
+  ));
+}
+
+// ---------- map gestures ----------
+function setupMapGestures() {
+  const m = smap.map;
+  const hitSomething = (pt: { x: number; y: number }) =>
+    m.queryRenderedFeatures([[pt.x - 8, pt.y - 8], [pt.x + 8, pt.y + 8]], { layers: ['pois', 'routes-hit'].filter((l) => m.getLayer(l)) }).length > 0;
+  m.on('click', (e) => {
+    if (hitSomething(e.point)) return;
+    const p: LonLat = [+e.lngLat.lng.toFixed(6), +e.lngLat.lat.toFixed(6)];
+    if (S.view === 'home' || S.view === 'place' || S.view === 'category') dropPin(p);
+  });
+  const longPress = (lngLat: { lng: number; lat: number }) => {
+    const p: LonLat = [+lngLat.lng.toFixed(6), +lngLat.lat.toFixed(6)];
+    if (S.view === 'directions' || S.view === 'details') { if (!inCoverage(p)) return outside(); S.to = placeAt(p); S.userPicked = false; openDirections(); }
+    else if (S.view === 'home' || S.view === 'place' || S.view === 'category') dropPin(p);
+  };
+  m.on('contextmenu', (e) => longPress(e.lngLat));
   // iOS Safari never fires contextmenu on touch, so detect a long-press ourselves
   let pressTimer: ReturnType<typeof setTimeout> | null = null;
   let pressAt: { x: number; y: number } | null = null;
   const cancel = () => { if (pressTimer) clearTimeout(pressTimer); pressTimer = null; };
-  smap.map.on('touchstart', (e) => {
-    if (!canPick() || e.originalEvent.touches.length !== 1) return cancel();
+  m.on('touchstart', (e) => {
+    if (e.originalEvent.touches.length !== 1) return cancel();
     pressAt = { x: e.point.x, y: e.point.y };
     const lngLat = e.lngLat;
     cancel();
-    pressTimer = setTimeout(() => { pressTimer = null; navigator.vibrate?.(30); pickAt(lngLat, 'to'); }, 600);
+    pressTimer = setTimeout(() => { pressTimer = null; navigator.vibrate?.(30); longPress(lngLat); }, 600);
   });
-  smap.map.on('touchmove', (e) => { if (pressAt && Math.hypot(e.point.x - pressAt.x, e.point.y - pressAt.y) > 10) cancel(); });
-  smap.map.on('touchend', cancel);
-  smap.map.on('touchcancel', cancel);
-  smap.map.on('movestart', (e) => { if ((e as { originalEvent?: Event }).originalEvent) cancel(); });
+  m.on('touchmove', (e) => { if (pressAt && Math.hypot(e.point.x - pressAt.x, e.point.y - pressAt.y) > 10) cancel(); });
+  m.on('touchend', cancel);
+  m.on('touchcancel', cancel);
+  m.on('movestart', (e) => {
+    if (!(e as { originalEvent?: Event }).originalEvent) return;
+    cancel();
+    if (S.follow) { S.follow = false; renderFabs(); }
+  });
+  m.on('rotate', () => renderCompass());
+  let safetyTimer: ReturnType<typeof setTimeout>;
+  m.on('moveend', () => { clearTimeout(safetyTimer); safetyTimer = setTimeout(refreshSafety, 250); if (S.view === 'pick') updatePickLabel(); });
 }
 
-function nearestLabel(p: LonLat): string {
-  // nearest named place within 300 m, else coordinates
-  let best: Poi | null = null, bd = 300;
+function outside() { toast('That point is outside the area this map covers (Delhi NCT).'); }
+
+/** A readable name for any point: a mapped place right there, or the street. */
+function nameFor(p: LonLat): { label: string; near?: string } {
+  let best: { name: string } | null = null, bd = 250;
+  for (const q of named) {
+    const d = Math.hypot((q.lon - p[0]) * 97600, (q.lat - p[1]) * 111200);
+    if (d < bd) { bd = d; best = q; }
+  }
   for (const q of S.pois) {
     if (!q.name) continue;
     const d = Math.hypot((q.lon - p[0]) * 97600, (q.lat - p[1]) * 111200);
     if (d < bd) { bd = d; best = q; }
   }
-  return best ? `Near ${best.name}` : `${p[1].toFixed(4)}, ${p[0].toFixed(4)}`;
+  if (best && bd < 40) return { label: best.name };
+  return { label: 'Dropped pin', near: best ? best.name : undefined };
+}
+function placeAt(p: LonLat): Place {
+  const n = nameFor(p);
+  return { lonlat: p, label: n.label === 'Dropped pin' && n.near ? `Near ${n.near}` : n.label, sub: n.near && n.label === 'Dropped pin' ? `Near ${n.near}` : undefined };
 }
 
-async function useMyLocation(): Promise<boolean> {
-  if (DEMO || S.settings.simulate) {
-    S.from = { lonlat: [77.2197, 28.6328], label: 'My location (demo: Rajiv Chowk)', mine: true };
-    return true;
-  }
-  return new Promise((resolve) => {
-    if (!('geolocation' in navigator)) { toast('Location is not available on this device. Search for a start point.'); resolve(false); return; }
-    navigator.geolocation.getCurrentPosition((pos) => {
-      const p: LonLat = [pos.coords.longitude, pos.coords.latitude];
-      S.myPos = { lon: p[0], lat: p[1], acc: pos.coords.accuracy, t: Date.now() };
-      if (!inCoverage(p)) { toast('You are outside the area this map covers (Delhi NCT). Search for a start point.', 5000); resolve(false); return; }
-      S.from = { lonlat: p, label: 'My location', mine: true };
-      smap.setMe(p);
-      resolve(true);
-    }, (e) => {
-      toast(e.code === 1 ? 'Location permission is off. Search for a start point instead.' : 'Could not find your location. Search for a start point.', 5000);
-      resolve(false);
-    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
-  });
-}
+// ---------- top: search bar & chips ----------
+const CATS: { key: string; label: string; icon: string; cats: PoiCat[] }[] = [
+  { key: 'police', label: 'Police', icon: '👮', cats: ['police'] },
+  { key: 'hospital', label: 'Hospitals', icon: '🏥', cats: ['hospital', 'clinic'] },
+  { key: 'pharmacy', label: 'Medical stores', icon: '💊', cats: ['pharmacy'] },
+  { key: 'station', label: 'Metro', icon: '🚇', cats: ['station'] },
+  { key: 'fuel', label: 'Petrol pumps', icon: '⛽', cats: ['fuel'] },
+];
 
-function placeField(which: 'from' | 'to'): HTMLElement {
-  const val = which === 'from' ? S.from : S.to;
+function renderSearchTop() {
   const input = h('input', {
-    type: 'search', class: 'field-input', id: `f-${which}`, autocomplete: 'off', enterkeyhint: 'search',
-    placeholder: which === 'from' ? 'Start: my location' : 'Where to?', value: val?.label ?? '',
-    'aria-label': which === 'from' ? 'Start point' : 'Destination',
+    type: 'search', id: 'q', class: 'search-input', autocomplete: 'off', enterkeyhint: 'search',
+    placeholder: 'Search here', 'aria-label': 'Search for a place in Delhi', value: S.view === 'place' && S.place ? S.place.label : '',
   });
   const list = h('ul', { class: 'suggest', role: 'listbox', hidden: true });
-  const choose = (hit: Hit | 'me' | 'map') => {
-    list.hidden = true;
-    if (hit === 'me') { useMyLocation().then((ok) => { if (ok) afterPlaceChange(); }); return; }
-    if (hit === 'map') {
-      picking = which; document.body.classList.add('picking');
-      toast(which === 'from' ? 'Tap the map to set the start' : 'Tap the map to set the destination', 4000);
-      return;
-    }
-    const p = { lonlat: [hit.lon, hit.lat] as LonLat, label: hit.name };
-    if (which === 'from') S.from = p; else S.to = p;
-    afterPlaceChange();
-  };
   const render = () => {
     const q = input.value;
-    const near = S.from?.lonlat ?? [77.215, 28.6];
+    const near = myLonLat() ?? [smap.map.getCenter().lng, smap.map.getCenter().lat];
     const hits = search.query(q, 7, near as [number, number]);
-    const items: HTMLElement[] = [];
-    if (which === 'from') items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('me') } }, h('span', { class: 'ic' }, '📍'), 'Use my location'));
-    items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => choose(x) } },
-      h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
-    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'ic' }, '👆'), 'Choose on the map'));
-    if (q.length >= 2 && !hits.length) items.splice(which === 'from' ? 1 : 0, 0, h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market.`));
+    const items: HTMLElement[] = hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); openHit(x); } } },
+      h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type))));
+    if (q.length >= 2 && !hits.length) items.push(h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market, or tap the map.`));
+    if (q.length < 2) items.push(...CATS.map((c) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); showCategory(c.key); } } },
+      h('span', { class: 'ic' }, c.icon), h('span', null, `${c.label} near you`))));
     clear(list, items);
     list.hidden = false;
   };
   input.addEventListener('input', render);
   input.addEventListener('focus', () => { input.select(); render(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { const first = list.querySelector('li[role=option]:not(:first-child), li[role=option]') as HTMLElement | null; first?.click(); }
+    if (e.key === 'Enter') (list.querySelector('li[role=option]') as HTMLElement | null)?.click();
+    if (e.key === 'Escape') { list.hidden = true; input.blur(); }
+  });
+  input.addEventListener('blur', () => setTimeout(() => (list.hidden = true), 200));
+  const hasPlace = S.view === 'place' || S.view === 'category';
+  clear(top,
+    h('div', { class: 'searchbar' },
+      h('button', { class: 'sb-btn', 'aria-label': 'Menu', id: 'menu', on: { click: () => openMenu() } }, h('span', { class: 'burger', 'aria-hidden': 'true' })),
+      input,
+      hasPlace ? h('button', { class: 'sb-btn', 'aria-label': 'Clear', on: { click: () => goHome() } }, '✕')
+        : h('span', { class: 'logo', 'aria-hidden': 'true', title: 'SafeRaah' }),
+      list),
+    h('div', { class: 'catchips', role: 'toolbar', 'aria-label': 'Find nearby' },
+      CATS.map((c) => h('button', { class: `chip cat${S.category?.key === c.key && S.view === 'category' ? ' on' : ''}`, 'data-cat': c.key,
+        on: { click: () => (S.view === 'category' && S.category?.key === c.key ? goHome() : showCategory(c.key)) } },
+      h('span', { 'aria-hidden': 'true' }, c.icon), c.label))),
+  );
+}
+
+function typeLabel(t: string): string {
+  if (t === 'street') return 'Street';
+  if (t === 'station') return 'Metro / rail';
+  const extra: Record<string, string> = { landmark: 'Landmark', park: 'Park', market: 'Market', school: 'School / college', office: 'Office', suburb: 'Area', neighbourhood: 'Area', quarter: 'Area', locality: 'Area' };
+  if (extra[t]) return extra[t];
+  return (CAT_INFO as Record<string, { label: string }>)[t]?.label ?? (t === 'place' ? 'Place' : t.charAt(0).toUpperCase() + t.slice(1));
+}
+
+// ---------- floating map buttons ----------
+const compassBtn = h('button', { class: 'fab compass', 'aria-label': 'Point the map north', hidden: true, on: { click: () => smap.map.easeTo({ bearing: 0, pitch: 0 }) } },
+  h('span', { class: 'needle', 'aria-hidden': 'true' }));
+function renderCompass() {
+  const b = smap?.map.getBearing() ?? 0;
+  compassBtn.hidden = Math.abs(b) < 1;
+  (compassBtn.firstChild as HTMLElement).style.transform = `rotate(${-b}deg)`;
+}
+function renderFabs() {
+  const v = S.view;
+  const show = ['home', 'place', 'category', 'directions', 'details', 'journey'].includes(v);
+  fabs.hidden = !show;
+  if (!show) return;
+  const J = S.journey;
+  const locState = myLonLat() ? (S.follow ? 'follow' : 'on') : S.loc.status === 'denied' ? 'off' : 'searching';
+  clear(fabs,
+    compassBtn,
+    v !== 'journey' ? h('button', { class: 'fab', id: 'layers-btn', 'aria-label': 'Map layers', title: 'Map layers', on: { click: () => openLayers() } }, h('span', { class: 'layers-ic', 'aria-hidden': 'true' })) : null,
+    h('button', { class: 'fab report-fab', id: 'report-btn', 'aria-label': 'Report something unsafe here', title: 'Report', on: { click: () => openReport() } }, '⚠'),
+    J ? (S.follow ? null : h('button', { class: 'fab wide-fab', id: 'recenter', on: { click: () => { S.follow = true; renderFabs(); if (S.myPos) followCamera(S.myPos); } } }, '➤ Re-centre'))
+      : h('button', { class: `fab locate ${locState}`, id: 'locate', 'aria-label': 'Show my location', title: 'My location', on: { click: () => locate() } },
+        h('span', { class: 'loc-ic', 'aria-hidden': 'true' })),
+  );
+  renderCompass();
+}
+
+// ---------- home ----------
+function goHome() {
+  setView('home');
+  S.place = null; S.category = null; S.reply = null;
+  smap.clearRoutes(); smap.setEndpoints(); smap.setPlacePin(); smap.setHits([]);
+  renderSearchTop();
+  renderHome();
+  drawMe();
+}
+
+function renderHome() {
+  if (S.view !== 'home') return;
+  const d = darkness(now());
+  const me = myLonLat();
+  const nearReports = me ? S.reports.filter((r) => haversine(r.lon, r.lat, me[0], me[1]) < 2000 && REPORT_KINDS[r.kind]?.danger).length : 0;
+  const status = S.loc.fix && !me ? 'You seem to be outside Delhi. Routes work inside Delhi NCT.'
+    : me ? null
+      : S.loc.status === 'denied' ? 'Location is off, so we cannot show where you are.'
+        : S.loc.status === 'unavailable' ? 'GPS is not available right now.' : 'Finding your location…';
+  clear(sheet,
+    h('div', { class: 'grip', 'aria-hidden': 'true' }),
+    h('div', { class: 'pad home' },
+      status ? h('div', { class: 'loc-note' }, h('span', null, status),
+        !me ? h('button', { class: 'btn small', id: 'mark-me-home', on: { click: () => startPick('me') } }, 'Mark where I am') : null) : null,
+      h('div', { class: 'now-row' },
+        h('span', { class: `now-pill ${d >= 0.5 ? 'night' : 'day'}` }, d >= 0.5 ? '🌙' : '☀️', ` ${clockText(now())}`),
+        h('span', { class: 'now-text' }, d >= 0.5 ? 'After dark: we weigh lighting, open places and busy streets more.' : 'Daytime: most busy streets are low risk.')),
+      nearReports ? h('p', { class: 'live-line' }, h('span', { class: 'live-dot' }), `${nearReports} live safety report${nearReports > 1 ? 's' : ''} near you`) : null,
+      h('p', { class: 'hint' }, 'Search a place, tap anywhere on the map, or pick a category above. Then tap ', h('b', null, 'Directions'), '.'),
+      h('div', { class: 'quick' },
+        h('button', { class: 'btn', on: { click: () => showCategory('safe') } }, '🛡️ Safe places near me'),
+        h('button', { class: 'btn', on: { click: () => showContacts() } }, '👥 Trusted contacts')),
+    ),
+  );
+}
+
+// ---------- place card ----------
+function openHit(x: Hit) {
+  const p: Place = { lonlat: [x.lon, x.lat], label: x.name, sub: typeLabel(x.type), kind: x.type };
+  showPlace(p, true);
+}
+function openPoi(id: number) {
+  const q = S.pois[id];
+  if (!q) return;
+  showPlace({ lonlat: [q.lon, q.lat], label: q.name || CAT_INFO[q.cat].label, sub: CAT_INFO[q.cat].label, poi: id, kind: q.cat }, true);
+}
+function dropPin(p: LonLat) {
+  if (!inCoverage(p)) return outside();
+  showPlace(placeAt(p), false);
+}
+
+async function showPlace(p: Place, fly: boolean) {
+  setView('place');
+  S.place = p; S.category = null;
+  smap.setHits([]);
+  smap.setPlacePin(p.lonlat);
+  renderSearchTop();
+  renderPlace();
+  if (fly) smap.map.flyTo({ center: p.lonlat, zoom: Math.max(16, smap.map.getZoom()), duration: 700, padding: mapPad() });
+  const w = await rpc<{ street: string; distM: number | null; onMap: boolean; risk: number | null }>({
+    type: 'whereis', at: p.lonlat, when: now().toISOString(), profile: S.settings.profile });
+  if (S.place !== p) return;
+  p.street = w.street; p.risk = w.onMap && (w.distM ?? 999) < 150 ? w.risk : null;
+  if (p.label === 'Dropped pin' && w.street) p.label = w.street;
+  renderPlace();
+}
+
+function renderPlace() {
+  const p = S.place;
+  if (!p || S.view !== 'place') return;
+  const me = myLonLat();
+  const dist = me ? haversine(me[0], me[1], p.lonlat[0], p.lonlat[1]) : null;
+  const poi = p.poi != null ? S.pois[p.poi] : null;
+  let open: { open: boolean; verified: boolean } | null = null;
+  if (poi) open = poiOpen(poi);
+  const tier = p.risk != null ? tierOf(p.risk, p.risk) : null;
+  const subBits = [p.sub, p.street && p.street !== p.label ? p.street : null].filter(Boolean).join(' · ');
+  clear(sheet,
+    h('div', { class: 'grip', 'aria-hidden': 'true' }),
+    h('div', { class: 'pad place-card' },
+      h('div', { class: 'pc-head' },
+        h('div', null, h('h2', { id: 'place-title' }, p.label), subBits ? h('div', { class: 'meta' }, subBits) : null),
+        h('button', { class: 'icon-btn flat', 'aria-label': 'Close', on: { click: () => goHome() } }, '✕')),
+      h('div', { class: 'pc-facts' },
+        dist != null ? h('span', null, `${fmtDist(dist)} from you`, dist > 120 ? ` · ~${fmtDuration((dist * 1.3) / (WALK_KMH / 3.6))} walk` : '') : null,
+        open ? h('span', { class: `open-pill ${open.open ? 'yes' : 'no'}` }, open.open ? (open.verified ? 'Open now' : 'Likely open now') : 'Closed now') : null,
+        tier ? h('span', { class: `street-now tier-text-${tier}` }, h('span', { class: `sw tier-${tier}` }), `Street right now: ${TIER_INFO[tier].label.toLowerCase()}`) : null),
+      poi?.oh ? h('p', { class: 'fine' }, 'Hours: ', poi.oh) : null,
+      h('div', { class: 'pc-actions' },
+        h('button', { class: 'btn primary', id: 'directions', on: { click: () => { S.to = { ...p }; S.from = null; S.userPicked = false; S.reply = null; openDirections(); } } }, '➤ Directions'),
+        h('button', { class: 'btn', id: 'start-here', on: { click: () => { S.from = { ...p }; S.to = null; S.reply = null; openDirections(); } } }, 'Start from here'),
+        !S.loc.fix ? h('button', { class: 'btn', id: 'im-here', on: { click: () => setManualMe(p.lonlat) } }, '📍 I am here') : null,
+        h('button', { class: 'btn ghost', on: { click: () => sharePlace(p) } }, 'Share')),
+    ),
+  );
+}
+
+function poiOpen(q: Poi): { open: boolean; verified: boolean } {
+  const r = lastOpen;
+  return r ? { open: !!r.open[q.id], verified: !!r.verified[q.id] } : { open: true, verified: false };
+}
+
+function setManualMe(p: LonLat) {
+  S.manualMe = p;
+  drawMe();
+  toast('Got it. We will use this as your location.');
+  renderFabs();
+  if (S.view === 'place') renderPlace();
+}
+
+async function sharePlace(p: Place) {
+  const u = new URL(location.href.split('?')[0]);
+  u.searchParams.set('to', `${p.lonlat[0].toFixed(5)},${p.lonlat[1].toFixed(5)}`);
+  u.searchParams.set('toName', p.label);
+  const text = `${p.label} — open in SafeRaah for safe routes`;
+  if (navigator.share) { try { await navigator.share({ title: p.label, text, url: u.href }); return; } catch { /* cancelled */ } }
+  navigator.clipboard?.writeText(`${text}: ${u.href}`).then(() => toast('Link copied'));
+}
+
+// ---------- category results ----------
+async function showCategory(key: string) {
+  const c = key === 'safe' ? { key: 'safe', label: 'Safe places', icon: '🛡️', cats: ['police', 'hospital', 'pharmacy', 'clinic', 'station', 'fuel'] as PoiCat[] } : CATS.find((x) => x.key === key)!;
+  const me = myLonLat();
+  const center: LonLat = me && smap.map.getBounds().contains(me) ? me : [smap.map.getCenter().lng, smap.map.getCenter().lat];
+  setView('category');
+  S.place = null;
+  smap.setPlacePin();
+  S.category = { key, title: c.label, items: [] };
+  renderSearchTop();
+  clear(sheet, h('div', { class: 'grip' }), h('div', { class: 'loading small' }, h('div', { class: 'spinner' })));
+  const r = await rpc<{ places: (Poi & { distM: number; open: boolean; verified: boolean })[] }>({
+    type: 'nearby', at: center, when: now().toISOString(), radiusM: 3000, cats: c.cats, sort: key === 'safe' ? 'open' : 'dist', limit: 25 });
+  if (S.view !== 'category' || S.category?.key !== key) return;
+  S.category.items = r.places;
+  smap.setHits(r.places.map((p) => ({ lon: p.lon, lat: p.lat, icon: CAT_INFO[p.cat].icon, open: p.open, label: `${p.name || CAT_INFO[p.cat].label}, ${p.open ? 'open' : 'closed'}` })),
+    (i) => openPoi(r.places[i].id));
+  if (r.places.length) smap.fit([center, ...r.places.slice(0, 10).map((p) => [p.lon, p.lat] as LonLat)], fitPad());
+  clear(sheet, h('div', { class: 'grip' }),
+    h('div', { class: 'list-head' }, h('h2', null, `${c.label} nearby`), h('div', { class: 'meta' }, `Within 3 km of ${me && center === me ? 'you' : 'the map centre'}, open state at ${clockText(now())}`)),
+    h('ul', { class: 'places' }, r.places.length ? r.places.map((p) => h('li', null,
+      h('button', { class: 'place-row', on: { click: () => openPoi(p.id) } },
+        h('span', { class: 'pi', 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon),
+        h('div', null, h('b', null, p.name || CAT_INFO[p.cat].label), h('small', null, `${CAT_INFO[p.cat].label} · ${fmtDist(p.distM)}`)),
+        h('span', { class: `open-pill ${p.open ? 'yes' : 'no'}` }, p.open ? (p.verified ? 'Open' : 'Likely open') : 'Closed')),
+      h('button', { class: 'btn small go', 'aria-label': `Directions to ${p.name || CAT_INFO[p.cat].label}`,
+        on: { click: () => { S.to = { lonlat: [p.lon, p.lat], label: p.name || CAT_INFO[p.cat].label }; S.from = null; S.userPicked = false; openDirections(); } } }, '➤'))) :
+      h('li', { class: 'empty' }, 'Nothing like this is mapped within 3 km. Call 112 if you need help.')));
+}
+
+// ---------- choose on map ----------
+function startPick(target: 'from' | 'to' | 'me') {
+  S.pick = { target, back: S.view === 'pick' ? 'home' : S.view };
+  setView('pick');
+  smap.setPlacePin();
+  const start = target === 'from' ? fromLonLat() : target === 'to' ? S.to?.lonlat : null;
+  if (start) smap.map.easeTo({ center: start, zoom: Math.max(16, smap.map.getZoom()) });
+  else if (smap.map.getZoom() < 15) smap.map.easeTo({ zoom: 15.5 });
+  const title = target === 'me' ? 'Where are you?' : target === 'from' ? 'Choose start' : 'Choose destination';
+  clear(top, h('div', { class: 'pick-bar' },
+    h('button', { class: 'back', 'aria-label': 'Cancel', on: { click: () => endPick(false) } }, '‹'),
+    h('div', null, h('b', null, title), h('div', { class: 'meta' }, 'Move the map so the pin is on the spot'))));
+  clear(sheet, h('div', { class: 'pad pick' },
+    h('div', { class: 'pick-label', id: 'pick-label' }, '…'),
+    h('button', { class: 'btn primary wide', id: 'pick-ok', on: { click: () => endPick(true) } }, target === 'me' ? 'I am here' : 'Done')));
+  updatePickLabel();
+}
+let pickSeq = 0;
+async function updatePickLabel() {
+  const c = smap.map.getCenter();
+  const p: LonLat = [c.lng, c.lat];
+  const el = document.getElementById('pick-label');
+  if (!el) return;
+  if (!inCoverage(p)) { el.textContent = 'Outside Delhi NCT'; return; }
+  const seq = ++pickSeq;
+  const n = placeAt(p);
+  el.textContent = n.label;
+  const w = await rpc<{ street: string }>({ type: 'whereis', at: p });
+  if (seq !== pickSeq) return;
+  if (w.street) el.textContent = n.label.startsWith('Near') || n.label === 'Dropped pin' ? `${w.street}${n.label.startsWith('Near') ? ' · ' + n.label : ''}` : `${n.label} · ${w.street}`;
+}
+function endPick(ok: boolean) {
+  const pk = S.pick!;
+  S.pick = null;
+  if (ok) {
+    const c = smap.map.getCenter();
+    const p: LonLat = [+c.lng.toFixed(6), +c.lat.toFixed(6)];
+    if (!inCoverage(p)) { outside(); return startPick(pk.target); }
+    const label = (document.getElementById('pick-label')?.textContent || placeAt(p).label).split(' · ')[0];
+    if (pk.target === 'me') { setManualMe(p); }
+    else if (pk.target === 'from') S.from = { lonlat: p, label };
+    else S.to = { lonlat: p, label };
+    if (pk.target !== 'me' || pk.back === 'directions' || pk.back === 'details') { S.userPicked = false; openDirections(); return; }
+  }
+  if (pk.back === 'directions' || pk.back === 'details') openDirections();
+  else if (pk.back === 'place' && S.place) showPlace(S.place, false);
+  else goHome();
+}
+
+// ---------- directions ----------
+function placeField(which: 'from' | 'to'): HTMLElement {
+  const val = which === 'from' ? (S.from ? S.from.label : myLonLat() ? 'Your location' : '') : S.to?.label ?? '';
+  const input = h('input', {
+    type: 'search', class: 'field-input', id: `f-${which}`, autocomplete: 'off', enterkeyhint: 'search',
+    placeholder: which === 'from' ? 'Choose start' : 'Choose destination', value: val,
+    'aria-label': which === 'from' ? 'Start point' : 'Destination',
+  });
+  if (which === 'from' && !S.from && myLonLat()) input.classList.add('mine');
+  const list = h('ul', { class: 'suggest', role: 'listbox', hidden: true });
+  const choose = (hit: Hit | 'me' | 'map') => {
+    list.hidden = true;
+    input.blur();
+    if (hit === 'map') { startPick(which); return; }
+    if (hit === 'me') {
+      if (!myLonLat()) { explainNoLocation(); return; }
+      if (which === 'from') S.from = null; else S.to = { lonlat: myLonLat()!, label: 'Your location', mine: true };
+    } else {
+      const p = { lonlat: [hit.lon, hit.lat] as LonLat, label: hit.name };
+      if (which === 'from') S.from = p; else S.to = p;
+    }
+    S.userPicked = false;
+    openDirections();
+  };
+  const render = () => {
+    const q = input.value === 'Your location' ? '' : input.value;
+    const near = fromLonLat() ?? [77.215, 28.6];
+    const hits = search.query(q, 7, near as [number, number]);
+    const items: HTMLElement[] = [];
+    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('me') } }, h('span', { class: 'ic' }, '◉'), 'Your location',
+      !myLonLat() ? h('small', null, 'not found yet') : null));
+    items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => choose(x) } },
+      h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
+    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'ic' }, '📍'), 'Choose on map'));
+    if (q.length >= 2 && !hits.length) items.splice(1, 0, h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market.`));
+    clear(list, items);
+    list.hidden = false;
+  };
+  input.addEventListener('input', render);
+  input.addEventListener('focus', () => { input.select(); render(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const opts = list.querySelectorAll('li[role=option]'); (opts[input.value.length >= 2 && opts.length > 2 ? 1 : 0] as HTMLElement | undefined)?.click(); }
     if (e.key === 'Escape') list.hidden = true;
   });
   input.addEventListener('blur', () => setTimeout(() => (list.hidden = true), 200));
   return h('div', { class: `field field-${which}` }, h('span', { class: `dot dot-${which}`, 'aria-hidden': 'true' }), input, list);
 }
 
-function typeLabel(t: string): string {
-  if (t === 'street') return 'Street';
-  if (t === 'station') return 'Metro / rail';
-  const extra: Record<string, string> = { landmark: 'Landmark', park: 'Park', market: 'Market', school: 'School / college', office: 'Office' };
-  if (extra[t]) return extra[t];
-  return (CAT_INFO as Record<string, { label: string }>)[t]?.label ?? (t === 'place' ? 'Place' : t.charAt(0).toUpperCase() + t.slice(1));
-}
-
-function chips<T extends string>(name: string, options: { v: T; label: string; icon: string }[], cur: T, onPick: (v: T) => void) {
-  return h('div', { class: 'chips', role: 'radiogroup', 'aria-label': name },
-    options.map((o) => h('button', {
-      class: `chip${o.v === cur ? ' on' : ''}`, role: 'radio', 'aria-checked': o.v === cur ? 'true' : 'false', 'data-v': o.v,
-      on: { click: () => onPick(o.v) },
-    }, h('span', { 'aria-hidden': 'true' }, o.icon), o.label)));
-}
-
-function showPlan() {
-  S.view = 'plan';
-  smap?.clearRoutes();
-  sheet.className = 'plan';
+function renderDirectionsTop() {
   const st = S.settings;
   const timeInput = h('input', { type: 'time', class: 'time-input', 'aria-label': 'Leave at', value: S.leaveAt ? isoClock(S.leaveAt) : '' });
-  timeInput.addEventListener('change', () => { S.leaveAt = timeInput.value ? timeToday(timeInput.value) : null; applyTheme(); refreshPois(); showPlan(); maybeAutoPlan(); });
-  clear(sheet,
-    h('div', { class: 'grip', 'aria-hidden': 'true' }),
-    h('div', { class: 'fields' }, placeField('from'), placeField('to')),
-    h('div', { class: 'group' }, h('h3', null, 'Who is travelling?'),
-      chips<Profile>('Who is travelling', [
-        { v: 'woman', label: 'Woman', icon: '👩' }, { v: 'child', label: 'Child', icon: '🧒' }, { v: 'general', label: 'Anyone', icon: '🙂' },
-      ], st.profile, (v) => { S.settings = save({ profile: v }); showPlan(); maybeAutoPlan(); })),
-    h('div', { class: 'group' }, h('h3', null, 'How?'),
-      chips<Mode>('How are you travelling', MODES.map((m) => ({ v: m, label: MODE_INFO[m].label, icon: MODE_INFO[m].emoji })),
-        st.mode, (v) => { S.settings = save({ mode: v }); showPlan(); maybeAutoPlan(); })),
-    h('div', { class: 'group row' }, h('h3', null, 'When?'),
-      h('button', { class: `chip${S.leaveAt ? '' : ' on'}`, on: { click: () => { S.leaveAt = null; applyTheme(); refreshPois(); showPlan(); maybeAutoPlan(); } } }, 'Now'),
-      h('label', { class: `chip time${S.leaveAt ? ' on' : ''}` }, 'Leave at ', timeInput)),
-    S.from && S.to ? h('button', { class: 'btn primary wide', id: 'go', on: { click: () => planRoutes() } }, 'Show safe routes') :
-      h('p', { class: 'hint' }, S.to ? 'Choose a start point, or use your location.' : 'Search a place, or long-press the map to set where you are going.'),
+  timeInput.addEventListener('change', () => { S.leaveAt = timeInput.value ? timeToday(timeInput.value) : null; applyTheme(); refreshPois(); openDirections(); });
+  const who = h('select', { class: 'who-select', 'aria-label': 'Who is travelling', id: 'who' },
+    ([['woman', '👩 Woman'], ['child', '🧒 Child'], ['general', '🙂 Anyone']] as [Profile, string][]).map(([v, l]) => h('option', { value: v, selected: st.profile === v }, l)));
+  who.addEventListener('change', () => { S.settings = save({ profile: who.value as Profile }); openDirections(); });
+  clear(top,
+    h('div', { class: 'dir-panel' },
+      h('div', { class: 'dir-fields' },
+        h('button', { class: 'back', 'aria-label': 'Close directions', on: { click: () => { S.to ? showPlace(S.to, false) : goHome(); } } }, '‹'),
+        h('div', { class: 'fields' }, placeField('from'), placeField('to')),
+        h('button', { class: 'swap', 'aria-label': 'Swap start and destination', id: 'swap', on: { click: () => swapEnds() } }, '⇅')),
+      h('div', { class: 'modes', role: 'tablist', 'aria-label': 'How are you travelling' },
+        MODES.map((m) => {
+          const t = S.modeTimes[m];
+          return h('button', { class: `mode-tab${m === st.mode ? ' on' : ''}`, role: 'tab', 'aria-selected': m === st.mode ? 'true' : 'false', 'data-mode': m,
+            'aria-label': `${MODE_INFO[m].label}${t ? ', ' + fmtDuration(t) : ''}`,
+            on: { click: () => { if (m === S.settings.mode) return; S.settings = save({ mode: m }); S.userPicked = false; openDirections(); } } },
+          h('span', { 'aria-hidden': 'true' }, MODE_INFO[m].emoji), h('small', null, t ? fmtDuration(t) : t === null ? '—' : ''));
+        })),
+      h('div', { class: 'dir-opts' }, who,
+        h('button', { class: `chip mini${S.leaveAt ? '' : ' on'}`, on: { click: () => { S.leaveAt = null; applyTheme(); refreshPois(); openDirections(); } } }, 'Leave now'),
+        h('label', { class: `chip mini time${S.leaveAt ? ' on' : ''}` }, 'at ', timeInput)),
+    ),
   );
-  smap?.setEndpoints(S.from?.lonlat, S.to?.lonlat);
+}
+
+function swapEnds() {
+  const a = S.from ?? (myLonLat() ? { lonlat: myLonLat()!, label: 'Your location', mine: true } : null);
+  const b = S.to;
+  S.to = a; S.from = b?.mine ? null : b;
+  S.userPicked = false;
+  openDirections();
 }
 
 function isoClock(d: Date): string {
@@ -330,98 +740,124 @@ function isoClock(d: Date): string {
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
 
-function afterPlaceChange() {
-  smap.setEndpoints(S.from?.lonlat, S.to?.lonlat);
-  if (S.to && !S.from) { useMyLocation().then((ok) => { if (ok) planRoutes(); else showPlan(); }); return; }
-  if (S.from && S.to) { planRoutes(); return; }
-  if (S.to) smap.map.flyTo({ center: S.to.lonlat, zoom: 15 });
-  showPlan();
+function openDirections() {
+  if (S.view !== 'directions') setView('directions');
+  smap.setPlacePin(); smap.setHits([]);
+  renderDirectionsTop();
+  planRoutes();
 }
 
-function maybeAutoPlan() { /* plan screen waits for the button; routes screen re-plans on change */ }
-
-// ---------- routes ----------
-async function planRoutes() {
-  if (!S.from || !S.to) { showPlan(); return; }
-  if (!inCoverage(S.from.lonlat) || !inCoverage(S.to.lonlat)) { toast('Both points must be inside Delhi NCT for now.'); showPlan(); return; }
-  S.view = 'routes';
-  sheet.className = 'routes';
-  clear(sheet, h('div', { class: 'grip' }), summaryBar(), h('div', { class: 'loading small' }, h('div', { class: 'spinner' }), h('p', null, 'Checking which streets are busy and open right now…')));
-  applyTheme();
-  smap.setEndpoints(S.from.lonlat, S.to.lonlat);
-  try {
-    const r = await rpc<{ reply: RouteReply }>({
-      type: 'route', from: S.from.lonlat, to: S.to.lonlat, mode: S.settings.mode, when: now().toISOString(), profile: S.settings.profile,
-    });
-    S.reply = r.reply;
-  } catch (err) {
+let planSeq = 0;
+async function planRoutes(opts: { quiet?: boolean } = {}) {
+  const from = fromLonLat();
+  const to = S.to?.lonlat;
+  smap.setEndpoints(S.from ? from ?? undefined : undefined, to);
+  if (!to || !from) {
     S.reply = null;
-    clear(sheet, h('div', { class: 'grip' }), summaryBar(), h('div', { class: 'pad' }, h('p', { class: 'error' }, 'Routing failed: ' + (err as Error).message)));
+    smap.clearRoutes();
+    clear(sheet, h('div', { class: 'grip' }), h('div', { class: 'pad' },
+      !to ? h('p', { class: 'hint' }, 'Where do you want to go? Search above, or ', h('button', { class: 'linkish', on: { click: () => startPick('to') } }, 'choose on the map'), '.')
+        : [h('h3', null, 'Where are you starting from?'),
+          h('p', null, S.loc.status === 'denied' ? 'Location is off, so we do not know where you are.' : S.loc.status === 'asking' || S.loc.status === 'idle' ? 'Finding your location…' : 'GPS is not available right now.'),
+          h('div', { class: 'row2' },
+            h('button', { class: 'btn primary', id: 'pick-start', on: { click: () => startPick('from') } }, '📍 Choose start on map'),
+            h('button', { class: 'btn', on: { click: () => (document.getElementById('f-from') as HTMLInputElement | null)?.focus() } }, 'Search start'))]));
     return;
   }
-  const safest = S.reply.routes.findIndex((x) => x.labels.includes('Safest') || x.labels.includes('Also safest'));
-  S.selected = Math.max(0, safest);
-  renderRoutes();
-  if (S.reply.routes.length) smap.fit(S.reply.routes.flatMap((x) => x.coords), fitPad());
-  refreshPois();
-}
-
-function fitPad() {
-  const wide = window.innerWidth >= 860;
-  return wide ? { top: 80, bottom: 60, left: 440, right: 60 } : { top: 80, bottom: Math.round(window.innerHeight * 0.54), left: 40, right: 90 };
-}
-
-function summaryBar() {
-  return h('div', { class: 'summary' },
-    h('button', { class: 'back', 'aria-label': 'Change trip', on: { click: () => showPlan() } }, '‹'),
-    h('div', { class: 'summary-text', on: { click: () => showPlan() } },
-      h('div', { class: 'from-to' }, h('span', { class: 'dot dot-from' }), S.from?.label ?? '', h('br'), h('span', { class: 'dot dot-to' }), S.to?.label ?? ''),
-      h('div', { class: 'meta' }, `${MODE_INFO[S.settings.mode].emoji} ${MODE_INFO[S.settings.mode].label}, ${S.settings.profile === 'child' ? 'child' : S.settings.profile === 'woman' ? 'woman' : 'anyone'}, ${S.leaveAt ? 'leaving ' + clockText(S.leaveAt) : 'leaving now'}`)),
-  );
-}
-
-function selectRoute(i: number) {
-  if (!S.reply || (S.view !== 'routes' && S.view !== 'details')) return;
-  S.selected = i;
+  if (!inCoverage(from) || !inCoverage(to)) { toast('Both points must be inside Delhi NCT for now.'); return; }
+  const seq = ++planSeq;
+  if (!opts.quiet) clear(sheet, h('div', { class: 'grip' }), h('div', { class: 'loading small' }, h('div', { class: 'spinner' }), h('p', null, 'Checking which streets are busy and open right now…')));
+  applyTheme();
+  const when = now().toISOString();
+  rpc<{ times: Partial<Record<Mode, number | null>> }>({ type: 'modeTimes', from, to, when, profile: S.settings.profile })
+    .then((r) => { if (seq === planSeq && (S.view === 'directions' || S.view === 'details')) { S.modeTimes = r.times; updateModeTimes(); } }).catch(() => {});
+  let reply: RouteReply;
+  try {
+    reply = (await rpc<{ reply: RouteReply }>({ type: 'route', from, to, mode: S.settings.mode, when, profile: S.settings.profile })).reply;
+  } catch (err) {
+    if (seq !== planSeq) return;
+    S.reply = null;
+    clear(sheet, h('div', { class: 'grip' }), h('div', { class: 'pad' }, h('p', { class: 'error' }, 'Routing failed: ' + (err as Error).message)));
+    return;
+  }
+  if (seq !== planSeq || (S.view !== 'directions' && S.view !== 'details')) return;
+  const prevLabel = S.reply?.routes[S.selected]?.labels[0];
+  S.reply = reply;
+  // the fastest route is shown first; the user decides
+  if (S.userPicked && prevLabel) S.selected = Math.max(0, reply.routes.findIndex((r) => r.labels[0] === prevLabel));
+  else S.selected = 0;
   if (S.view === 'details') showDetails(); else renderRoutes();
+  if (!opts.quiet && reply.routes.length) smap.fit(reply.routes.flatMap((x) => x.coords), fitPad());
 }
 
-function tierBadge(r: WorkerRoute) {
+function updateModeTimes() {
+  for (const b of top.querySelectorAll<HTMLButtonElement>('.mode-tab')) {
+    const m = b.dataset.mode as Mode;
+    const t = S.modeTimes[m];
+    b.querySelector('small')!.textContent = t ? fmtDuration(t) : t === null ? '—' : '';
+  }
+}
+
+function mapPad() {
+  const th = top.getBoundingClientRect().height, sh = sheet.getBoundingClientRect().height;
+  return wide() ? { top: 40, bottom: 40, left: 440, right: 80 } : { top: th + 10, bottom: Math.min(sh, window.innerHeight * 0.6) + 10, left: 10, right: 10 };
+}
+function fitPad() {
+  const th = top.getBoundingClientRect().height;
+  const sh = Math.max(sheet.getBoundingClientRect().height, window.innerHeight * 0.38);
+  return wide() ? { top: 70, bottom: 60, left: 450, right: 90 } : { top: th + 30, bottom: Math.min(sh, window.innerHeight * 0.52) + 20, left: 36, right: 76 };
+}
+
+function selectRoute(i: number, fromMap = false) {
+  if (!S.reply || (S.view !== 'directions' && S.view !== 'details')) return;
+  S.selected = i;
+  S.userPicked = true;
+  if (S.view === 'details') showDetails(); else renderRoutes();
+  if (fromMap) (sheet.querySelector('.route-card.sel') as HTMLElement | null)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function tierBadge(r: { tier: Tier }) {
   const t = TIER_INFO[r.tier];
-  const icon = r.tier === 'green' ? '✓' : r.tier === 'yellow' ? '!' : '⚠';
-  return h('span', { class: `tier tier-${r.tier}` }, h('span', { 'aria-hidden': 'true' }, icon), t.label);
+  return h('span', { class: `tier tier-${r.tier}` }, h('span', { 'aria-hidden': 'true' }, tierIcon(r.tier)), t.label);
 }
 
 function renderRoutes() {
   const R = S.reply!;
-  smap.showRoutes(R.routes, S.selected);
+  smap.showRoutes(R.routes, S.selected, { callouts: true, onSelect: (i) => selectRoute(i, true) });
   const adv = R.advice;
   const vehicleNote = S.settings.mode !== 'walk' && !S.onewayKnown;
+  const sel = R.routes[S.selected];
   clear(sheet,
-    h('div', { class: 'grip' }), summaryBar(),
-    R.error ? h('div', { class: 'pad' }, h('p', { class: 'error' }, R.error), h('button', { class: 'btn', on: { click: () => showPlan() } }, 'Change trip')) : null,
-    adv ? h('div', { class: `advice advice-${adv.level}` },
+    h('div', { class: 'grip' }),
+    R.error ? h('div', { class: 'pad' }, h('p', { class: 'error' }, R.error)) : null,
+    adv && adv.level !== 'ok' ? h('div', { class: `advice advice-${adv.level}` },
       h('strong', null, adv.title), h('p', null, adv.body),
-      adv.suggestMode ? h('button', { class: 'btn small', on: { click: () => { S.settings = save({ mode: adv.suggestMode! }); planRoutes(); } } },
+      adv.suggestMode ? h('button', { class: 'btn small', on: { click: () => { S.settings = save({ mode: adv.suggestMode! }); S.userPicked = false; openDirections(); } } },
         `Show ${MODE_INFO[adv.suggestMode].label.toLowerCase()} routes`) : null) : null,
+    R.routes.length ? h('p', { class: 'decide' }, `${R.routes.length} route${R.routes.length > 1 ? 's' : ''}, fastest first. The colour shows how safe each is at ${clockText(now())}. You choose.`) : null,
     h('ol', { class: 'route-list', 'aria-label': 'Routes, fastest first' },
       R.routes.map((r, i) => {
+        const on = i === S.selected;
         return h('li', null, h('button', {
-          class: `route-card${i === S.selected ? ' sel' : ''}`, 'aria-pressed': i === S.selected ? 'true' : 'false', 'data-tier': r.tier,
+          class: `route-card${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', 'data-tier': r.tier,
           on: { click: () => { if (S.selected === i) showDetails(); else selectRoute(i); } },
         },
         h('span', { class: 'swatch', style: { background: TIER_INFO[r.tier].color } }),
-        h('span', { class: 'rc-main' },
-          h('span', { class: 'rc-time' }, fmtDuration(r.timeS)),
-          h('span', { class: 'rc-sub' }, fmtDist(r.lengthM), r.labels.filter((l) => l !== 'Also safest').map((l) => h('span', { class: `lbl lbl-${l.toLowerCase()}` }, l)))),
-        h('span', { class: 'rc-side' }, tierBadge(r),
-          h('span', { class: 'rc-why' }, r.warnings[0] ?? havenLine(r)))));
+        h('span', { class: 'rc-body' },
+          h('span', { class: 'rc-top' },
+            h('span', { class: 'rc-time' }, fmtDuration(r.timeS)),
+            h('span', { class: 'rc-sub' }, fmtDist(r.lengthM)),
+            r.labels.filter((l) => l !== 'Also safest' && l !== 'Alternative').map((l) => h('span', { class: `lbl lbl-${l.toLowerCase()}` }, l)),
+            h('span', { class: 'rc-badge' }, tierBadge(r))),
+          h('span', { class: `rc-prec prec-${r.tier}` }, h('span', { 'aria-hidden': 'true' }, r.tier === 'green' ? '🛡️' : '⚠️'), r.precautions.headline),
+          on && r.precautions.items.length && r.tier !== 'green'
+            ? h('span', { class: 'rc-items' }, r.precautions.items.slice(0, 2).map((t) => h('span', null, '• ', t))) : null)));
       })),
     R.note ? h('p', { class: 'note' }, R.note) : null,
     vehicleNote ? h('p', { class: 'note' }, 'One-way streets are not in this map yet. Follow road signs.') : null,
-    R.routes.length ? h('div', { class: 'actions' },
-      h('button', { class: 'btn', on: { click: () => showDetails() } }, 'Why this colour?'),
-      h('button', { class: 'btn primary', id: 'start', on: { click: () => startJourney() } }, 'Start journey')) : null,
+    sel ? h('div', { class: 'actions sticky' },
+      h('button', { class: 'btn', id: 'details-btn', on: { click: () => showDetails() } }, 'Precautions & steps'),
+      h('button', { class: 'btn primary', id: 'start', on: { click: () => startJourney() } }, '▶ Start')) : null,
   );
 }
 
@@ -439,27 +875,32 @@ function havenLine(r: WorkerRoute): string {
 // ---------- details ----------
 function showDetails() {
   if (!S.reply?.routes.length) return;
-  S.view = 'details';
-  sheet.className = 'details';
+  setView('details');
   const r = S.reply.routes[S.selected];
-  smap.showRoutes(S.reply.routes, S.selected);
+  smap.showRoutes(S.reply.routes, S.selected, { callouts: true, onSelect: (i) => selectRoute(i, true) });
   const contacts = S.settings.contacts;
   const pct = (x: number) => `${Math.round(x * 100)}%`;
   const dark = darkness(now()) >= 0.5;
   clear(sheet,
     h('div', { class: 'grip' }),
-    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back to routes', on: { click: () => { S.view = 'routes'; sheet.className = 'routes'; renderRoutes(); } } }, '‹'),
-      h('div', { class: 'summary-text' }, h('div', { class: 'big-time' }, fmtDuration(r.timeS), ' ', tierBadge(r)), h('div', { class: 'meta' }, `${fmtDist(r.lengthM)} by ${MODE_INFO[S.settings.mode].label.toLowerCase()}, arrive about ${clockText(new Date(now().getTime() + r.timeS * 1000))}`))),
+    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back to routes', on: { click: () => { setView('directions'); renderRoutes(); } } }, '‹'),
+      h('div', { class: 'summary-text' }, h('div', { class: 'big-time' }, fmtDuration(r.timeS), ' ', tierBadge(r)),
+        h('div', { class: 'meta' }, `${fmtDist(r.lengthM)} by ${MODE_INFO[S.settings.mode].label.toLowerCase()}, arrive about ${clockText(new Date(now().getTime() + r.timeS * 1000))}`))),
     h('div', { class: 'pad' },
+      h('div', { class: `prec-box prec-${r.tier}` },
+        h('h3', null, r.tier === 'green' ? 'Precautions' : 'Precautions for this route'),
+        h('p', { class: 'prec-head' }, r.precautions.headline),
+        r.precautions.items.length ? h('ul', { class: 'prec-list' }, r.precautions.items.map((t) => h('li', null, t))) : null),
       h('h3', null, 'Why this colour'),
       h('ul', { class: 'facts' },
         h('li', null, h('b', null, pct(r.mainRoadShare)), ' on main roads'),
         dark ? h('li', null, h('b', null, pct(r.litShare)), ' on roads that are usually lit') : null,
         h('li', null, h('b', null, pct(r.policeShare)), ' within 500 m of a police station'),
-        h('li', null, h('b', null, String(r.havenIds.length)), ` places open along the way at ${clockText(now())}`)),
+        h('li', null, h('b', null, String(r.havenIds.length)), ` places open along the way at ${clockText(now())}`),
+        h('li', null, havenLine(r))),
       r.dangerSpots.length ? [h('h3', null, 'Risky stretches'), h('ul', { class: 'spots' }, r.dangerSpots.map((d) =>
         h('li', null, h('button', { class: 'linkish', on: { click: () => smap.map.flyTo({ center: [d.lon, d.lat], zoom: 16.5 }) } },
-          h('span', { class: 'warn-ic' }, '!'), `${fmtDist(d.lengthM)}: ${d.reasons.join(', ') || 'quiet at this hour'}`))))] : null,
+          h('span', { class: 'warn-ic' }, '!'), `${fmtDist(d.lengthM)}${d.street ? ' on ' + d.street : ''}: ${d.reasons.join(', ') || 'quiet at this hour'}`))))] : null,
       r.havenList.length ? [h('h3', null, 'Safe places open on the way'), h('ul', { class: 'havens' }, r.havenList.slice(0, 8).map((p) =>
         h('li', null, h('span', { 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon), h('span', null, p.name || CAT_INFO[p.cat].label),
           h('small', null, p.verified ? 'open now' : 'open now (estimated hours)'))))] : null,
@@ -469,20 +910,158 @@ function showDetails() {
         on: { click: () => { c.notify = !c.notify; S.settings = save({ contacts }); showDetails(); } },
       }, c.notify ? '✓ ' : '', c.name)), h('button', { class: 'chip', on: { click: () => showContacts() } }, '+ Add')) :
         h('p', null, h('button', { class: 'linkish', on: { click: () => showContacts() } }, 'Add a trusted contact'), ' to send an arrival message.'),
-      h('details', { class: 'steps' }, h('summary', null, 'Directions'),
+      h('details', { class: 'steps' }, h('summary', null, 'Turn-by-turn directions'),
         h('ol', null, r.steps.map((s) => h('li', null, s.text, s.distM ? h('small', null, ` ${fmtDist(s.distM)}`) : null)))),
-      h('p', { class: 'fine' }, 'Scores describe the street environment at this hour (open places, police, busy roads, lighting, parks and traveller reviews). They help you choose; they cannot guarantee safety.'),
+      h('p', { class: 'fine' }, 'Scores describe the street environment at this hour (open places, police, busy roads, lighting, parks, live reports and traveller reviews). They help you choose; they cannot guarantee safety.'),
     ),
-    h('div', { class: 'actions sticky' }, h('button', { class: 'btn primary wide', id: 'start', on: { click: () => startJourney() } }, 'Start journey')),
+    h('div', { class: 'actions sticky' }, h('button', { class: 'btn primary wide', id: 'start', on: { click: () => startJourney() } }, '▶ Start journey')),
   );
 }
 
+// ---------- live layers ----------
+let safetySeq = 0;
+async function refreshSafety() {
+  if (!smap || !S.settings.layers.safety || smap.map.getZoom() < 13.5) return;
+  const b = smap.map.getBounds();
+  const seq = ++safetySeq;
+  const r = await rpc<{ fc: any }>({ type: 'safetyLines', bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], when: now().toISOString(), profile: S.settings.profile, limit: 6000 });
+  if (seq === safetySeq) smap.setSafety(r.fc);
+}
+
+async function refreshReports(force = false) {
+  if (!liveAvailable() || (!force && Date.now() - S.reportsAt < 20000)) return;
+  try {
+    const r = await live.list(S.bbox);
+    S.reportsAt = Date.now();
+    const changed = JSON.stringify(r.reports.map((x) => [x.id, x.confirms, x.dismisses])) !== JSON.stringify(S.reports.map((x) => [x.id, x.confirms, x.dismisses]));
+    S.reports = r.reports;
+    drawReports();
+    if (!changed) return;
+    await rpc({ type: 'reports', reports: r.reports, now: r.now });
+    refreshSafety();
+    if (S.view === 'directions' && S.reply) planRoutes({ quiet: true });
+    if (S.view === 'home') renderHome();
+  } catch { /* live reports are optional */ }
+}
+
+function drawReports() {
+  const list = S.settings.layers.reports ? S.reports : [];
+  smap.setReports(list.map((r) => ({ id: r.id, lon: r.lon, lat: r.lat, icon: REPORT_KINDS[r.kind]?.icon ?? '⚠', label: REPORT_KINDS[r.kind]?.label ?? r.kind, danger: REPORT_KINDS[r.kind]?.danger ?? true })),
+    (id) => openReportPopup(id));
+}
+
+function ago(ms: number) { const m = Math.round(ms / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; }
+
+function openReportPopup(id: string) {
+  const r = S.reports.find((x) => x.id === id);
+  if (!r) return;
+  const k = REPORT_KINDS[r.kind];
+  const box = h('div', { class: 'rp' },
+    h('b', null, `${k.icon} ${k.label}`),
+    h('div', { class: 'meta' }, `Reported ${ago(Date.now() - r.createdAt)} · ${r.confirms} confirmed${r.dismisses ? ` · ${r.dismisses} said gone` : ''}`),
+    h('div', { class: 'meta' }, 'Is it still there?'),
+    h('div', { class: 'row2' },
+      h('button', { class: 'btn small', on: { click: () => vote(true) } }, 'Still there'),
+      h('button', { class: 'btn small ghost', on: { click: () => vote(false) } }, 'Gone')));
+  const pop = smap.popup([r.lon, r.lat], box);
+  async function vote(still: boolean) {
+    const me = myLonLat();
+    if (!me) { toast('We need your location to confirm reports near you.'); return; }
+    try {
+      await live.vote(id, still, { lon: me[0], lat: me[1], acc: myAcc() });
+      pop.remove();
+      toast(still ? 'Thanks, confirmed.' : 'Thanks. It will disappear if others agree.');
+      refreshReports(true);
+    } catch (err) { toast((err as Error).message); }
+  }
+}
+
+function openReport() {
+  const me = S.journey && S.myPos ? [S.myPos.lon, S.myPos.lat] as LonLat : myLonLat();
+  if (!liveAvailable()) { toast('Live reports need an internet connection.', 5000); return; }
+  if (!me) {
+    openModal(h('div', { class: 'modal-card' }, h('h2', null, 'Report a problem here'),
+      h('p', null, 'You can only report what is happening near you, so we need your location.'),
+      h('button', { class: 'btn primary wide', on: { click: () => { closeModal(); startPick('me'); } } }, 'Mark where I am on the map'),
+      h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Cancel')));
+    return;
+  }
+  const send = async (kind: ReportKind) => {
+    try {
+      const r = await live.report(kind, me, { lon: me[0], lat: me[1], acc: S.journey ? S.myPos!.acc : myAcc() });
+      closeModal();
+      toast(r.merged ? 'Thanks. Someone reported this too, so it now counts more.' : `Thanks. Others will see this for about ${REPORT_KINDS[kind].hours} h, and routes will avoid it.`, 5000);
+      refreshReports(true);
+    } catch (err) { toast((err as Error).message, 5000); }
+  };
+  openModal(h('div', { class: 'modal-card' },
+    h('h2', null, 'What is happening here?'),
+    h('p', { class: 'fine' }, 'Your report is anonymous and expires in a few hours. Routes for everyone avoid this spot until then.'),
+    h('div', { class: 'report-grid' }, (Object.keys(REPORT_KINDS) as ReportKind[]).map((k) =>
+      h('button', { class: `report-kind${REPORT_KINDS[k].danger ? '' : ' good'}`, 'data-kind': k, on: { click: () => send(k) } },
+        h('span', { class: 'rk-ic', 'aria-hidden': 'true' }, REPORT_KINDS[k].icon), REPORT_KINDS[k].label))),
+    h('p', { class: 'fine' }, 'In danger right now? Use SOS or call 112.'),
+    h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Cancel')));
+}
+
+function openLayers() {
+  const L = S.settings.layers;
+  const toggle = (k: keyof typeof L, label: string, note: string) => h('label', { class: 'layer-row' },
+    h('input', { type: 'checkbox', checked: L[k], 'data-layer': k, on: { change: (e: Event) => {
+      const on = (e.target as HTMLInputElement).checked;
+      S.settings = save({ layers: { ...S.settings.layers, [k]: on } });
+      if (k === 'reports') drawReports(); else smap.setLayerVisible(k, on);
+      if (k === 'safety' && on) refreshSafety();
+    } } }),
+    h('span', null, h('b', null, label), h('small', null, note)));
+  openModal(h('div', { class: 'modal-card' },
+    h('h2', null, 'Map layers'),
+    toggle('safety', 'Street safety now', 'Every street coloured by how safe it is at this hour (zoom in to see).'),
+    h('div', { class: 'legend' }, (['green', 'yellow', 'red', 'darkred'] as Tier[]).map((t) => h('span', null, h('i', { style: { background: TIER_INFO[t].color } }), TIER_INFO[t].label))),
+    toggle('reports', 'Live reports', liveAvailable() ? `Problems other travellers reported in the last few hours${livePreview() ? ' (shared by everyone using this preview)' : ''}.` : 'Needs an internet connection.'),
+    toggle('pois', 'Safe places', 'Police, hospitals, medical stores, metro and petrol pumps. Filled = open now.'),
+    hasTraffic() ? toggle('traffic', 'Traffic', 'Live traffic speed on roads.') : null,
+    h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Done')));
+}
+
+function openMenu() {
+  openModal(h('div', { class: 'modal-card menu' },
+    h('div', { class: 'brand' }, h('span', { class: 'logo', 'aria-hidden': 'true' }), 'SafeRaah'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showCategory('safe'); } } }, '🛡️  Safe places near me'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showContacts(); } } }, '👥  Trusted contacts & settings'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); openLayers(); } } }, '🗺️  Map layers'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showHelp(); } } }, '❓  How to use SafeRaah'),
+    h('a', { class: 'menu-row danger', href: telLink('112') }, '📞  Call 112 (emergency)'),
+    h('a', { class: 'menu-row', href: telLink('1091') }, '📞  Women helpline 1091'),
+    h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Close')));
+}
+
 // ---------- journey ----------
+function prefOf(r: WorkerRoute): Pref {
+  if (r.labels.includes('Fastest') && !r.labels.includes('Also safest')) return 'fastest';
+  if (r.labels.includes('Safest') || r.labels.includes('Also safest')) return 'safest';
+  return 'balanced';
+}
+function pickByPref(routes: WorkerRoute[], pref: Pref): WorkerRoute | undefined {
+  if (!routes.length) return undefined;
+  if (pref === 'fastest') return routes[0];
+  if (pref === 'safest') return routes.reduce((a, b) => (b.meanRisk < a.meanRisk ? b : a));
+  return routes.reduce((a, b) => (b.timeS * (1 + 2 * b.meanRisk) < a.timeS * (1 + 2 * a.meanRisk) ? b : a));
+}
+
 async function startJourney() {
   if (!S.reply?.routes.length || !S.to) return;
+  const sim = S.settings.simulate || DEMO;
+  if (!sim && !S.loc.fix && !('geolocation' in navigator && S.loc.status !== 'denied')) {
+    openModal(h('div', { class: 'modal-card' }, h('h2', null, 'Tracking needs your location'),
+      h('p', null, 'To watch your journey and tell your contacts when you reach, SafeRaah needs GPS. Location is blocked here.'),
+      h('p', { class: 'fine' }, 'You can try the journey with simulated movement instead.'),
+      h('button', { class: 'btn primary wide', on: { click: () => { closeModal(); S.settings = save({ simulate: true }); startJourney(); } } }, 'Simulate the trip'),
+      h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Cancel')));
+    return;
+  }
   const route = S.reply.routes[S.selected];
   const startedAt = Date.now();
-  const sim = S.settings.simulate || DEMO;
   const monitor = new JourneyMonitor({
     mode: S.settings.mode, route: route.coords, segTier: route.segTier, dest: route.coords[route.coords.length - 1],
     etaS: route.timeS, startedAt,
@@ -498,23 +1077,27 @@ async function startJourney() {
   const pauseAt = params.get('pause') ? { atFrac: Number(params.get('pause')), seconds: Number(params.get('pauseS') ?? 300) } : undefined;
   const source = sim ? simulatedSource(route.coords, speedMps, Number(params.get('speed') ?? 30), pauseAt) : gpsSource();
   let lastT = startedAt;
-  const J = {
-    route, monitor, source, handle, pendingFixes: [] as Fix[], dest: S.to, startedAt, offRoute: false,
+  const J: NonNullable<typeof S.journey> = {
+    route, monitor, source, handle, pref: prefOf(route), pendingFixes: [], dest: S.to, startedAt, offRoute: false,
     clock: () => (sim ? lastT : Date.now()),
-    tickTimer: setInterval(() => handleEvents(monitor.tick(J.clock())), 15000),
+    tickTimer: setInterval(() => handleEvents(J.monitor.tick(J.clock())), 15000),
     pushTimer: setInterval(() => flushFixes(), 10000),
+    lastReroute: 0, lastSaferCheck: startedAt, better: null,
   };
   S.journey = J;
-  S.view = 'journey';
-  sheet.className = 'journey';
+  S.follow = true;
+  setView('journey');
+  smap.setEndpoints(undefined, route.coords[route.coords.length - 1]);
   smap.showRoutes([route], 0);
   source.start((f) => {
     lastT = f.t;
     S.myPos = f;
     J.pendingFixes.push(f);
-    smap.setMe([f.lon, f.lat]);
-    if (!userPanned) smap.map.easeTo({ center: [f.lon, f.lat], zoom: Math.max(smap.map.getZoom(), 15.5), duration: 400 });
-    handleEvents(monitor.feed(f));
+    const hd = headingAlong(J.route.coords, f);
+    smap.setMe([f.lon, f.lat], f.acc, hd);
+    if (S.follow) followCamera(f);
+    handleEvents(J.monitor.feed(f));
+    if (S.journey === J && J.clock() - J.lastSaferCheck > 300000) { J.lastSaferCheck = J.clock(); checkSaferRoute(); }
     if (S.view === 'journey') renderJourney();
   }, (msg) => toast(msg, 6000));
   // optional server SMS on start
@@ -525,7 +1108,32 @@ async function startJourney() {
   renderJourney();
 }
 
-let userPanned = false;
+function nearestIdx(coords: LonLat[], f: { lon: number; lat: number }): number {
+  let ni = 0, bd = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const d = (coords[i][0] - f.lon) ** 2 + (coords[i][1] - f.lat) ** 2;
+    if (d < bd) { bd = d; ni = i; }
+  }
+  return ni;
+}
+/** Direction of travel: along the route ahead of you (heading-up navigation). */
+function headingAlong(coords: LonLat[], f: { lon: number; lat: number }): number {
+  const i = nearestIdx(coords, f);
+  let j = i + 1;
+  while (j < coords.length - 1 && haversine(coords[i][0], coords[i][1], coords[j][0], coords[j][1]) < 25) j++;
+  const a = coords[Math.min(i, coords.length - 2)], b = coords[Math.min(j, coords.length - 1)];
+  const dx = (b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180), dy = b[1] - a[1];
+  return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+}
+function followCamera(f: Fix) {
+  const J = S.journey;
+  if (!J) return;
+  const bearing = headingAlong(J.route.coords, f);
+  const th = top.getBoundingClientRect().height, sh = sheet.getBoundingClientRect().height;
+  smap.map.easeTo({ center: [f.lon, f.lat], zoom: 17, bearing, pitch: 45, duration: 500,
+    padding: wide() ? { top: 120, bottom: 80, left: 420, right: 40 } : { top: th + 40, bottom: sh + 60, left: 0, right: 0 } });
+}
+
 let lastStepIdx = -1;
 
 function renderJourney() {
@@ -533,33 +1141,34 @@ function renderJourney() {
   if (!J) return;
   const f = S.myPos;
   const coords = J.route.coords;
-  // progress: nearest vertex
-  let ni = 0;
-  if (f) {
-    let bd = Infinity;
-    for (let i = 0; i < coords.length; i++) {
-      const d = (coords[i][0] - f.lon) ** 2 + (coords[i][1] - f.lat) ** 2;
-      if (d < bd) { bd = d; ni = i; }
-    }
-  }
+  const ni = f ? nearestIdx(coords, f) : 0;
   let remain = 0;
-  for (let i = ni; i < coords.length - 1; i++) remain += Math.hypot((coords[i + 1][0] - coords[i][0]) * 97600, (coords[i + 1][1] - coords[i][1]) * 111200);
+  for (let i = ni; i < coords.length - 1; i++) remain += haversine(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
   const remainS = J.route.lengthM > 0 ? J.route.timeS * (remain / J.route.lengthM) : 0;
   const next = J.route.steps.find((s) => s.idx > ni) ?? J.route.steps[J.route.steps.length - 1];
   let toNext = 0;
-  for (let i = ni; i < Math.min(next.idx, coords.length - 1); i++) toNext += Math.hypot((coords[i + 1][0] - coords[i][0]) * 97600, (coords[i + 1][1] - coords[i][1]) * 111200);
+  for (let i = ni; i < Math.min(next.idx, coords.length - 1); i++) toNext += haversine(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
   if (next.idx !== lastStepIdx && 'vibrate' in navigator && lastStepIdx >= 0) navigator.vibrate?.(60);
   lastStepIdx = next.idx;
   const clockNow = new Date(J.clock());
-  clear(sheet,
+  const segTier = J.route.segTier[Math.min(ni, J.route.segTier.length - 1)] ?? 'green';
+  clear(top,
     h('div', { class: 'instruction', role: 'status' }, h('span', { class: `turn turn-${next.turn}`, 'aria-hidden': 'true' }, turnGlyph(next.turn)),
-      h('div', null, h('b', null, next.text), next.turn !== 'arrive' ? h('div', { class: 'meta' }, `in ${fmtDist(toNext)}`) : null)),
-    J.offRoute ? h('div', { class: 'advice advice-caution' }, h('strong', null, 'You left the route'),
-      h('button', { class: 'btn small', on: { click: () => reroute() } }, 'Find a new safe route')) : null,
+      h('div', null, next.turn !== 'arrive' ? h('div', { class: 'in-dist' }, fmtDist(toNext)) : null, h('b', null, next.text))),
+    segTier !== 'green' ? h('div', { class: `seg-warn tier-${segTier}` }, tierIcon(segTier), segTier === 'yellow' ? ' Quieter stretch: stay alert' : ' Risky stretch: keep moving, stay on the main road') : null,
+  );
+  clear(sheet,
+    J.offRoute ? h('div', { class: 'advice advice-caution' }, h('strong', null, J.rerouting ? 'Finding a new safe route…' : 'You left the route'),
+      !J.rerouting ? h('button', { class: 'btn small', on: { click: () => autoReroute() } }, 'Find a new safe route') : null) : null,
+    J.better && !J.dismissedBetter ? h('div', { class: 'advice advice-ok better' }, h('strong', null, 'Safer route available'),
+      h('p', null, `${fmtDuration(J.better.timeS)} from here, ${TIER_INFO[J.better.tier].label.toLowerCase()}. ${J.better.precautions.headline}.`),
+      h('div', { class: 'row2' }, h('button', { class: 'btn small primary', id: 'switch-route', on: { click: () => switchRoute(J.better!, 'Switched to the safer route') } }, 'Switch'),
+        h('button', { class: 'btn small ghost', on: { click: () => { J.dismissedBetter = true; renderJourney(); } } }, 'Keep mine'))) : null,
     h('div', { class: 'journey-row' },
-      h('div', null, h('div', { class: 'big-time' }, fmtDuration(remainS)), h('div', { class: 'meta' }, `${fmtDist(remain)} left, arrive ${clockText(new Date(clockNow.getTime() + remainS * 1000))}`)),
+      h('div', null, h('div', { class: 'big-time' }, fmtDuration(remainS), h('span', { class: 'eta' }, clockText(new Date(clockNow.getTime() + remainS * 1000)))),
+        h('div', { class: 'meta' }, `${fmtDist(remain)} left · ${MODE_INFO[S.settings.mode].label}`)),
       h('div', { class: 'journey-actions' },
-        h('button', { class: 'btn', on: { click: () => shareTrip() } }, J.handle ? 'Share live trip' : 'Share trip'),
+        h('button', { class: 'btn', on: { click: () => shareTrip() } }, J.handle ? 'Share live' : 'Share'),
         h('button', { class: 'btn ghost', on: { click: () => endJourney(false) } }, 'End'))),
     J.handle ? h('p', { class: 'fine live' }, h('span', { class: 'live-dot' }), 'Live trip link is active') : h('p', { class: 'fine' }, isOnline() ? '' : 'Offline: live sharing and reviews need an internet connection.'),
     (S.settings.simulate || DEMO) ? h('p', { class: 'fine' }, 'Demo mode: your movement is simulated.') : null,
@@ -575,11 +1184,61 @@ function handleEvents(evs: JourneyEvent[]) {
   if (!J) return;
   for (const e of evs) {
     if (e.type === 'arrived') { onArrived(); return; }
-    if (e.type === 'off_route') { J.offRoute = true; toast('You are off the planned route.'); }
+    if (e.type === 'off_route') { J.offRoute = true; autoReroute(); }
     if (e.type === 'back_on_route') J.offRoute = false;
     if (e.type === 'stopped') checkIn(`You have not moved for ${e.minutes} min${e.onRiskySegment ? ' on a quiet stretch' : ''}.`, 'stopped');
     if (e.type === 'overdue') checkIn(`You are ${e.minutesLate} min later than expected.`, 'overdue');
   }
+}
+
+/** Off the route: find a new route from where you are, keeping your choice (fastest / safest). */
+async function autoReroute() {
+  const J = S.journey;
+  if (!J || J.rerouting || !S.myPos) return;
+  if (J.clock() - J.lastReroute < 30000) return;
+  J.rerouting = true;
+  J.lastReroute = J.clock();
+  renderJourney();
+  try {
+    const at = S.myPos;
+    const r = await rpc<{ reply: RouteReply }>({ type: 'route', from: [at.lon, at.lat], to: J.dest.lonlat, mode: S.settings.mode,
+      when: new Date(J.clock()).toISOString(), profile: S.settings.profile });
+    const best = pickByPref(r.reply.routes, J.pref);
+    if (best && S.journey === J) switchRoute(best, `New ${J.pref === 'fastest' ? 'fastest' : 'safe'} route from where you are`);
+  } catch { toast('Could not find a new route. Head back to the blue line.'); } finally { J.rerouting = false; if (S.journey === J) renderJourney(); }
+}
+
+/** Every few minutes: has a clearly safer way appeared (night fell, live reports, shops closed)? */
+async function checkSaferRoute() {
+  const J = S.journey;
+  if (!J || !S.myPos || J.dismissedBetter) return;
+  const at = S.myPos;
+  try {
+    const r = await rpc<{ reply: RouteReply }>({ type: 'route', from: [at.lon, at.lat], to: J.dest.lonlat, mode: S.settings.mode,
+      when: new Date(J.clock()).toISOString(), profile: S.settings.profile });
+    const safest = pickByPref(r.reply.routes, 'safest');
+    const same = pickByPref(r.reply.routes, J.pref);
+    if (!safest || !same || S.journey !== J) return;
+    if (TIER_RANK[safest.tier] < TIER_RANK[same.tier] && safest.timeS <= same.timeS + 420 && safest.meanRisk < same.meanRisk - 0.04) {
+      J.better = safest;
+      navigator.vibrate?.([80, 60, 80]);
+      renderJourney();
+    }
+  } catch { /* try again next time */ }
+}
+
+function switchRoute(route: WorkerRoute, msg: string) {
+  const J = S.journey;
+  if (!J) return;
+  J.route = route;
+  J.monitor = new JourneyMonitor({ mode: S.settings.mode, route: route.coords, segTier: route.segTier, dest: route.coords[route.coords.length - 1],
+    etaS: route.timeS, startedAt: J.clock() });
+  if (S.myPos) J.monitor.feed(S.myPos);
+  J.offRoute = false; J.better = null;
+  smap.showRoutes([route], 0);
+  if (J.handle) api.reroute(J.handle, route.coords, route.edges, route.timeS).catch(() => {});
+  toast(msg);
+  renderJourney();
 }
 
 async function flushFixes() {
@@ -619,6 +1278,7 @@ function openModal(content: HTMLElement) {
   (content.querySelector('button, a') as HTMLElement | null)?.focus();
 }
 function closeModal() { modal.hidden = true; clear(modal); if (checkTimer) { clearInterval(checkTimer); checkTimer = null; } }
+modal.addEventListener('click', (e) => { if (e.target === modal && !checkTimer) closeModal(); });
 
 let checkTimer: ReturnType<typeof setInterval> | null = null;
 function checkIn(reason: string, kind: 'stopped' | 'overdue') {
@@ -643,7 +1303,7 @@ function checkIn(reason: string, kind: 'stopped' | 'overdue') {
 async function openSos(auto = false) {
   const J = S.journey;
   if (J) J.sos = true;
-  const pos: LonLat = S.myPos ? [S.myPos.lon, S.myPos.lat] : S.from?.lonlat ?? (smap ? [smap.map.getCenter().lng, smap.map.getCenter().lat] : [77.21, 28.61]);
+  const pos: LonLat = S.myPos ? [S.myPos.lon, S.myPos.lat] : myLonLat() ?? S.from?.lonlat ?? (smap ? [smap.map.getCenter().lng, smap.map.getCenter().lat] : [77.21, 28.61]);
   const link = J?.handle ? shareUrl(J.handle.shareId) : undefined;
   const text = sosText(S.settings.travellerName, pos[0], pos[1], link);
   const phones = S.settings.contacts.map((c) => c.phone);
@@ -668,21 +1328,17 @@ async function openSos(auto = false) {
   ));
 }
 
-async function reroute() {
-  const J = S.journey;
-  if (!J || !S.myPos) return;
-  S.from = { lonlat: [S.myPos.lon, S.myPos.lat], label: 'My location', mine: true };
-  stopJourney();
-  S.leaveAt = null;
-  await planRoutes();
-}
-
 function stopJourney() {
   const J = S.journey;
   if (!J) return;
   J.source.stop();
   clearInterval(J.tickTimer);
   clearInterval(J.pushTimer);
+}
+
+function leaveNav() {
+  S.follow = false;
+  smap.map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 400 });
 }
 
 async function endJourney(confirmed: boolean) {
@@ -695,9 +1351,10 @@ async function endJourney(confirmed: boolean) {
   stopJourney();
   const J = S.journey;
   if (J?.handle) { await flushFixes(); api.finish(J.handle).catch(() => {}); }
-  S.journey = null;
-  smap.setMe(undefined);
-  showPlan();
+  S.journey = null; S.myPos = null;
+  leaveNav();
+  drawMe();
+  openDirections();
 }
 
 async function onArrived() {
@@ -707,8 +1364,9 @@ async function onArrived() {
   let result: any = null;
   if (J.handle) { try { result = await api.finish(J.handle); } catch { result = null; } }
   J.result = result;
-  S.view = 'arrived';
-  sheet.className = 'arrived';
+  setView('arrived');
+  leaveNav();
+  clear(top);
   const msg = arrivalText(S.settings.travellerName, J.dest.label, clockText(new Date(J.clock())));
   const phones = notifyPhones(S.settings.contacts);
   let autoSent = 0;
@@ -760,15 +1418,15 @@ function renderArrived(msg: string, autoSent: number) {
       names.length && !autoSent ? h('button', { class: 'btn wide', on: { click: () => showMessageSheet('Tell them you reached', msg) } }, 'Other ways to send') : null,
     ),
     h('div', { class: 'pad' }, reviewBox),
-    h('div', { class: 'actions' }, h('button', { class: 'btn wide', on: { click: () => { S.journey = null; smap.setMe(undefined); S.from = S.to ? { ...S.to } : null; S.to = null; showPlan(); } } }, 'Done')),
+    h('div', { class: 'actions' }, h('button', { class: 'btn wide', id: 'done', on: { click: () => { S.journey = null; S.myPos = null; S.from = null; S.to = null; S.reply = null; goHome(); } } }, 'Done')),
   );
 }
 
 // ---------- contacts & settings ----------
 function showContacts() {
-  const prev = S.view;
-  S.view = 'contacts';
-  sheet.className = 'page';
+  const prev = S.view === 'contacts' ? 'home' : S.view;
+  setView('contacts');
+  clear(top);
   const st = S.settings;
   const name = h('input', { type: 'text', placeholder: 'Name, e.g. Maa', 'aria-label': 'Contact name', maxlength: 30 });
   const phone = h('input', { type: 'tel', placeholder: 'Mobile, e.g. 98765 43210', 'aria-label': 'Contact mobile number', inputmode: 'tel' });
@@ -781,7 +1439,7 @@ function showContacts() {
     if (st.contacts.some((c) => c.phone === p)) { err.textContent = 'This number is already saved.'; err.hidden = false; return; }
     const c: Contact = { id: crypto.randomUUID(), name: name.value.trim(), phone: p, notify: true };
     S.settings = save({ contacts: [...st.contacts, c] });
-    showContacts();
+    S.view = prev; showContacts();
   };
   const travName = h('input', { type: 'text', value: st.travellerName, placeholder: 'Your name (shown in messages)', 'aria-label': 'Your name', maxlength: 30 });
   travName.addEventListener('change', () => { S.settings = save({ travellerName: travName.value.trim() }); toast('Saved'); });
@@ -794,7 +1452,7 @@ function showContacts() {
         h('div', null, h('b', null, c.name), h('small', null, c.phone)),
         h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: c.notify, 'aria-label': `Send arrival message to ${c.name}`,
           on: { change: (e: Event) => { c.notify = (e.target as HTMLInputElement).checked; S.settings = save({ contacts: st.contacts }); } } }), 'Arrival message'),
-        h('button', { class: 'icon-btn', 'aria-label': `Remove ${c.name}`, on: { click: () => { S.settings = save({ contacts: st.contacts.filter((x) => x.id !== c.id) }); showContacts(); } } }, '✕')))) :
+        h('button', { class: 'icon-btn flat', 'aria-label': `Remove ${c.name}`, on: { click: () => { S.settings = save({ contacts: st.contacts.filter((x) => x.id !== c.id) }); S.view = prev; showContacts(); } } }, '✕')))) :
         h('p', { class: 'hint' }, 'Add up to 5 people who should know when you reach, and who get your SOS.'),
       h('div', { class: 'add-contact' }, name, phone, h('button', { class: 'btn primary', id: 'add-contact', on: { click: add } }, 'Add contact')), err,
       h('p', { class: 'fine' }, 'Contacts stay on this phone. Messages are sent from your own phone by SMS or WhatsApp.'),
@@ -805,56 +1463,38 @@ function showContacts() {
   );
 }
 
-function goBack(prev: typeof S.view) {
-  if (prev === 'details') showDetails();
-  else if (prev === 'routes' && S.reply) { S.view = 'routes'; sheet.className = 'routes'; renderRoutes(); }
-  else if (prev === 'journey' && S.journey) { S.view = 'journey'; sheet.className = 'journey'; renderJourney(); }
-  else if (prev === 'arrived' && S.journey) { S.view = 'arrived'; sheet.className = 'arrived'; renderArrived(arrivalText(S.settings.travellerName, S.journey.dest.label, clockText(new Date())), 0); }
-  else showPlan();
-}
-
-// ---------- safe places nearby ----------
-async function showPlaces() {
-  const prev = S.view;
-  S.view = 'places';
-  sheet.className = 'page';
-  const at: LonLat = S.myPos ? [S.myPos.lon, S.myPos.lat] : S.from?.lonlat ?? [smap.map.getCenter().lng, smap.map.getCenter().lat];
-  clear(sheet, h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, '‹'), h('h2', null, 'Safe places nearby')),
-    h('div', { class: 'loading small' }, h('div', { class: 'spinner' })));
-  const r = await rpc<{ places: (Poi & { distM: number; open: boolean; verified: boolean })[] }>({
-    type: 'nearby', at, when: now().toISOString(), radiusM: 1500, cats: ['police', 'hospital', 'pharmacy', 'clinic', 'station', 'fuel'],
-  });
-  clear(sheet, h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, '‹'),
-    h('div', { class: 'summary-text' }, h('h2', null, 'Safe places nearby'), h('div', { class: 'meta' }, `Within 1.5 km, open state at ${clockText(now())}`))),
-  h('ul', { class: 'places' }, r.places.length ? r.places.map((p) => h('li', null,
-    h('span', { class: 'pi', 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon),
-    h('div', null, h('b', null, p.name || CAT_INFO[p.cat].label), h('small', null, `${CAT_INFO[p.cat].label}, ${fmtDist(p.distM)} away`)),
-    h('span', { class: `open-pill ${p.open ? 'yes' : 'no'}` }, p.open ? (p.verified ? 'Open' : 'Likely open') : 'Closed'),
-    h('button', { class: 'btn small', on: { click: () => { S.to = { lonlat: [p.lon, p.lat], label: p.name || CAT_INFO[p.cat].label }; if (!S.from) S.from = { lonlat: at, label: 'My location', mine: true }; planRoutes(); } } }, 'Go'))) :
-    h('li', { class: 'empty' }, 'No safe places mapped within 1.5 km. Call 112 if you need help.')));
+function goBack(prev: View) {
+  if (prev === 'details' && S.reply) { setView('directions'); renderDirectionsTop(); showDetails(); }
+  else if (prev === 'directions') { setView('directions'); renderDirectionsTop(); if (S.reply) renderRoutes(); else planRoutes(); }
+  else if (prev === 'journey' && S.journey) { setView('journey'); renderJourney(); }
+  else if (prev === 'arrived' && S.journey) { setView('arrived'); renderArrived(arrivalText(S.settings.travellerName, S.journey.dest.label, clockText(new Date())), 0); }
+  else if (prev === 'place' && S.place) showPlace(S.place, false);
+  else goHome();
 }
 
 // ---------- help ----------
 const GUIDES = [
-  ['plan', 'Plan a trip', 'Search where you are going, pick who and how, then tap Show safe routes.'],
-  ['routes', 'Choose a route', 'Routes go from fastest to safest. Colour, label and icon all show the risk. Tap a route twice for the reasons.'],
-  ['journey', 'Start the journey', 'Pick who gets your arrival message, then tap Start journey.'],
+  ['plan', 'Find a place', 'Your blue dot shows where you are. Search, tap any spot on the map, or tap Police, Hospitals or Medical stores.'],
+  ['routes', 'Choose a route', 'Tap Directions. The fastest route is picked first; the colours show how safe each one is now, with the precautions it needs. You decide.'],
+  ['journey', 'Start the journey', 'Pick who gets your arrival message, then tap Start. The map follows you and finds a new safe route if you take a different turn.'],
   ['checkin', 'If you stop too long', 'We ask if you are OK. No answer in 30 seconds opens SOS.'],
   ['sos', 'SOS', 'One tap: call 112, or send your location to your contacts.'],
   ['review', 'Arrive and review', 'Your contacts get the arrival message. Rate how safe the streets felt.'],
 ];
 function showHelp() {
-  const prev = S.view;
-  S.view = 'help';
-  sheet.className = 'page';
+  const prev = S.view === 'help' ? 'home' : S.view;
+  setView('help');
+  clear(top);
   clear(sheet, h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, '‹'), h('h2', null, 'How to use SafeRaah')),
     h('div', { class: 'pad guides' }, GUIDES.map(([k, title, text]) => h('figure', { class: 'guide' },
       h('img', { src: `${BASE}help/${k}.gif`, alt: `Animation: ${title}`, loading: 'lazy', width: 240, height: 520,
         on: { error: (e: Event) => ((e.target as HTMLElement).style.display = 'none') } }),
       h('figcaption', null, h('b', null, title), h('span', null, text)))),
+    h('h3', null, 'Live on the map'),
+    h('p', null, '⚠ Report: tell others about a dark street, harassment, a drunk group or someone following people. Reports expire in a few hours and routes avoid them. 🗺️ Layers: colour every street by how safe it is right now.'),
     h('h3', null, 'Helplines'), h('ul', { class: 'helplines' }, HELPLINES.map((x) => h('li', null, h('a', { href: telLink(x.n) }, x.n), ` ${x.label}`))),
     h('h3', null, 'How the colours are worked out'),
-    h('p', null, 'Every street gets a score for the time you travel: are places like police stations, hospitals, medical stores and shops open nearby, is the road busy, is it usually lit, does it run through a park or empty land, and what verified travellers said about it. Routes are coloured by their real score, so in daytime all routes can be green.'),
+    h('p', null, 'Every street gets a score for the time you travel: are places like police stations, hospitals, medical stores and shops open nearby, is the road busy, is it usually lit, does it run through a park or empty land, what travellers reported in the last few hours, and what verified travellers said about it. Routes are coloured by their real score, so in daytime all routes can be green.'),
     h('p', { class: 'fine' }, 'Some areas of Delhi have fewer shops and places mapped on OpenStreetMap, so "nothing open nearby" there can partly mean "nothing mapped yet". Your reviews help correct this.'),
     h('p', { class: 'fine' }, `Map data © OpenStreetMap contributors (ODbL) via OpenMapTiles, snapshot ${S.snapshot || '31 Oct 2026'}. Covers all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad.`)));
 }
@@ -862,7 +1502,7 @@ function showHelp() {
 function showIntro() {
   openModal(h('div', { class: 'modal-card intro' },
     h('h2', null, 'Reach home safely'),
-    h('p', null, 'SafeRaah shows up to four routes, from the fastest to the safest, based on what is open, how busy the streets are and what other travellers felt.'),
+    h('p', null, 'SafeRaah works like a normal map: your blue dot, search, tap any place, Directions. For every trip we show the fastest route first and up to three safer ones, each coloured by how safe it is right now and with the precautions it needs.'),
     h('p', null, 'Add one trusted contact so we can tell them when you reach.'),
     h('div', { class: 'row2' },
       h('button', { class: 'btn ghost', on: { click: () => { save({ seenIntro: true }); closeModal(); } } }, 'Later'),
@@ -872,9 +1512,8 @@ function showIntro() {
 
 // ---------- live trip viewer (for contacts) ----------
 async function showTrack(shareId: string) {
-  S.view = 'track';
-  sheet.className = 'page track';
-  sosBtn.hidden = true;
+  setView('track');
+  clear(top);
   let first = true;
   const draw = async () => {
     let d: any;
@@ -884,7 +1523,7 @@ async function showTrack(shareId: string) {
     }
     smap.showRoutes([{ coords: d.route, tier: 'green', dangerSpots: [] } as unknown as WorkerRoute], 0);
     smap.setEndpoints(d.route[0], d.dest);
-    if (d.last) smap.setMe([d.last.lon, d.last.lat]);
+    if (d.last) smap.setMe([d.last.lon, d.last.lat], d.last.acc ?? 0);
     if (first) { smap.fit(d.route, fitPad()); first = false; }
     const statusText: Record<string, string> = { active: 'On the way', arrived: 'Reached safely', ended: 'Trip ended', sos: 'SOS: needs help now', expired: 'Trip expired' };
     const eta = new Date(d.startedAt + d.etaS * 1000);
@@ -901,7 +1540,6 @@ async function showTrack(shareId: string) {
 
 // ---------- misc ----------
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden && !checkTimer) closeModal(); });
-mapEl.addEventListener('pointerdown', () => { if (S.view === 'journey') { userPanned = true; setTimeout(() => (userPanned = false), 15000); } });
 if ('serviceWorker' in navigator && import.meta.env.PROD && !DEMO) {
   navigator.serviceWorker.register(BASE + 'sw.js').then(async () => {
     await navigator.serviceWorker.ready;

@@ -46,6 +46,11 @@
 | FR-21 | Manage up to 5 trusted contacts (name + phone), stored on the device. |
 | FR-22 | Built-in help: short animated guides (GIF) for each main task. |
 | FR-23 | Works in Hindi/English labels for places where OSM has them (English UI in this version). |
+| FR-24 | Live safety reports (v1.2): report what is happening where you are (no lights, deserted, harassment, drunk group, followed, stray dogs, police patrol); others confirm or dismiss; expire after 2–12 h; raise (or, for patrols, lower) street risk within 60 m for everyone's routing; reporter must be within 300 m; duplicates within 80 m merge; ≤ 6 per device per hour. |
+| FR-25 | Live street-safety layer: every street in view coloured by its risk at the chosen time; open/closed places refresh every minute; optional live traffic layer with a provider key. |
+| FR-26 | Map-first like Google/Apple Maps: live blue dot with accuracy circle and heading, locate button, search bar over the map, tap anywhere for a place card (name/street, distance, open now, street safety now), category chips, choose start/destination on the map with a centre pin; when GPS is unavailable say so and let the user mark their position. |
+| FR-27 | Directions: start = your location by default, swap, a time for every travel mode, the fastest route selected first, every route showing its precautions (card line, full list in details) and a time label on the map; the user decides. |
+| FR-28 | Navigation: heading-up follow mode with re-centre and compass; leaving the route re-plans from the current position keeping the user's choice (fastest/safest) and updates the live link; every 5 min offer a clearly safer route if one appears. |
 
 ## 3. Non-functional requirements
 | ID | Requirement |

@@ -2,6 +2,8 @@
 
 SafeRaah (सुरक्षित राह, "safe path") is our own map and router for India, covering **all of Delhi NCT** (all 11 districts including New Delhi, plus the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad). For any trip — walking, scooty/bike, auto or car — it shows **up to four routes from the fastest to the safest**, coloured by real risk at that hour (🟥 high risk · 🔴 unsafe · 🟡 take care · 🟢 low risk), sends an **arrival message** to trusted contacts, checks on you if you stop on a risky street, and gives one-tap **SOS**.
 
+It works like a normal maps app — live blue dot with accuracy and heading, search, tap anywhere for a place card, category chips (police, hospitals, medical stores, metro, petrol pumps), Directions with a time for every way of travelling, choose-on-map, heading-up navigation that re-routes when you leave the route — and adds live safety layers: every street coloured by its risk this hour, and Waze-style live reports (dark street, harassment, drunk group, someone following…) that other travellers confirm or dismiss and that routing avoids until they expire. The fastest route is selected first; each route shows the precautions it needs, and the user decides.
+
 Runs as a web app (PWA, works offline after the first visit) and as Android/iOS apps via Capacitor.
 
 ## Quick start
@@ -23,7 +25,8 @@ Try a demo trip: `/?demo=1&from=77.24318,28.57009&to=77.22429,28.54259&t=21:30` 
 | Risk model | `shared/risk.ts` | R(e,t) from open places within 50 m, police distance, busyness, lighting prior, parks/empty land, child traffic, verified reviews; scaled by time of day |
 | Router | `shared/router.ts` | A* with cost T·(1 + α·E·R) for α ∈ {0, 0.5, 1.5, 5}; de-duplication; Pareto filter (slower ⇒ clearly safer); max 1.6× detour; alternatives up to 4 (a clearly safer alternative joins the ranked list). Walks: ~0.1 s; 30 km drives: ~1 s |
 | Journey | `shared/journey.ts` | Arrival geofence (10 m target, widened by GPS accuracy to 15–40 m), off-route, stop/overdue check-ins, 80% route-coverage verification |
-| Server | `server/` | Node + built-in SQLite: journeys, GPS fixes, verified reviews (one vote per device per street, 90-day half-life), live trip links, SOS, optional SMS |
+| Live | `shared/live.ts`, `shared/precautions.ts` | Live reports → extra risk on streets within 60 m (half until a second traveller confirms, fading to expiry; police patrols lower risk); plain-language precautions per route |
+| Server | `server/` | Node + built-in SQLite: journeys (incl. mid-trip re-route), GPS fixes, verified reviews (one vote per device per street, 90-day half-life), live reports (near-you check, merge within 80 m, 6/hour, still-there/gone votes), live trip links, SOS, optional SMS |
 | App | `web/src/` | MapLibre on our basemap, router in a web worker, all screens, PWA service worker |
 | Native | `android/`, `ios/`, `capacitor.config.ts` | Background location while the screen is locked |
 
@@ -33,8 +36,8 @@ Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-te
 
 ```bash
 npm run typecheck
-npm test               # 66 unit + API tests (vitest)
-npm run build && npm run test:e2e   # 12 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
+npm test               # 81 unit + API tests (vitest)
+npm run build && npm run test:e2e   # 18 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
 python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web/public/help/
 ```
 
@@ -75,5 +78,7 @@ npm run build
 * OpenStreetMap is mapped less densely in outer and lower-income areas. Where few shops are mapped, "nothing open nearby" can partly mean "nothing mapped yet", which can make those areas score riskier than they are. Verified reviews correct this over time.
 * Footpaths come from map tiles, so a few may not connect perfectly to roads.
 * GPS-based review verification can be fooled by a determined spoofer; it stops casual abuse.
+* Live traffic needs a paid key: set `VITE_TOMTOM_KEY` at build time and a Traffic layer appears under Layers.
+* The hosted preview page cannot use GPS (its host does not grant location), so there you mark where you are on the map; the Android/iOS apps and the web app on your own domain (HTTPS) use real GPS. In the preview, live reports are kept in the page's shared store instead of the SafeRaah server.
 
 Map data © OpenStreetMap contributors, ODbL. Fonts: Mukta (Ek Type, OFL), Noto Sans (OFL).
