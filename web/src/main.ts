@@ -907,6 +907,7 @@ function showDetails() {
         h('li', null, h('span', { 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon), h('span', null, p.name || CAT_INFO[p.cat].label),
           h('small', null, p.verified ? 'open now' : 'open now (estimated hours)'))))] : null,
       h('h3', null, 'Tell when I reach'),
+      h('p', { class: 'fine' }, '🔒 Your location stays on your phone. During the trip it is shared only for your live link and deleted when you arrive.'),
       contacts.length ? h('div', { class: 'chips' }, contacts.map((c) => h('button', {
         class: `chip${c.notify ? ' on' : ''}`, 'aria-pressed': c.notify ? 'true' : 'false',
         on: { click: () => { c.notify = !c.notify; S.settings = save({ contacts }); showDetails(); } },
@@ -1456,18 +1457,20 @@ function renderArrived(msg: string, autoSent: number) {
     on: { click: () => { rating = n; drawStars(); submit.disabled = false; } } }, '★')));
   const submit = h('button', { class: 'btn primary', disabled: true, id: 'submit-review', on: { click: async () => {
     try {
-      await api.review(J.handle!.id, res.reviewToken, rating, [...tags], comment.value);
-      clear(reviewBox, h('p', { class: 'ok-msg' }, 'Thanks. Your review helps others once enough travellers agree about these streets.'));
+      await api.review(J.handle!.id, res.reviewToken, rating, [...tags]);
+      clear(reviewBox, h('p', { class: 'ok-msg' }, 'Thanks. Your answer helps others once enough travellers agree about these streets. Nothing about your trip was kept.'));
     } catch (err) { toast((err as Error).message); }
-  } } }, 'Submit review');
-  const comment = h('textarea', { rows: 2, maxlength: 500, placeholder: 'Anything others should know? (optional)', 'aria-label': 'Comment' });
+  } } }, 'Send');
   drawStars();
   const reviewBox = h('div', { class: 'review' });
   if (res?.eligible && res.reviewToken) {
-    clear(reviewBox, h('h3', null, 'How safe did this route feel?'), stars,
+    clear(reviewBox,
+      h('p', { class: 'fine' }, 'Two quick questions, only if you want to answer. Anonymous: your trip\'s location was already deleted.'),
+      h('h3', null, '1. How safe did the route feel?'), stars,
+      h('h3', null, '2. What did you notice? (optional)'),
       h('div', { class: 'chips wrap' }, TAGS.map(([k, label]) => h('button', { class: 'chip', 'aria-pressed': 'false',
         on: { click: (e: Event) => { const b = e.currentTarget as HTMLElement; if (tags.has(k)) tags.delete(k); else tags.add(k); b.classList.toggle('on'); b.setAttribute('aria-pressed', String(tags.has(k))); } } }, label))),
-      comment, h('div', { class: 'row2' }, h('button', { class: 'btn ghost', on: { click: () => clear(reviewBox) } }, 'Skip'), submit));
+      h('div', { class: 'row2' }, h('button', { class: 'btn ghost', id: 'skip-review', on: { click: () => clear(reviewBox, h('p', { class: 'fine' }, 'Skipped. Nothing about this trip is kept.')) } }, 'Skip'), submit));
   } else if (res) {
     clear(reviewBox, h('p', { class: 'fine' }, 'Reviews are only accepted from verified trips. This one could not be verified: ', res.reasons.join('; '), '.'));
   } else {
@@ -1523,6 +1526,21 @@ function showContacts() {
         h('p', { class: 'hint' }, 'Add up to 5 people who should know when you reach, and who get your SOS.'),
       h('div', { class: 'add-contact' }, name, phone, h('button', { class: 'btn primary', id: 'add-contact', on: { click: add } }, 'Add contact')), err,
       h('p', { class: 'fine' }, 'Contacts stay on this phone. Messages are sent from your own phone by SMS or WhatsApp.'),
+      h('h3', null, 'Your privacy'),
+      h('ul', { class: 'privacy' },
+        h('li', null, 'Your location stays on this phone. Planning routes and guidance work without sending it anywhere.'),
+        h('li', null, 'Only during a trip, and only to show your family the live link and to check you really reached, your position goes to the SafeRaah server. It is deleted the moment the trip ends.'),
+        h('li', null, 'The two questions after a trip are optional and anonymous; no trip, route or comment is kept with your answer.'),
+        h('li', null, 'Contacts and settings are kept only on this phone.')),
+      h('button', { class: 'btn ghost wide', id: 'wipe', on: { click: () => {
+        openModal(h('div', { class: 'modal-card' }, h('h2', null, 'Delete everything on this phone?'),
+          h('p', null, 'Removes your contacts, name and settings from SafeRaah on this phone.'),
+          h('div', { class: 'row2' }, h('button', { class: 'btn ghost', on: { click: () => closeModal() } }, 'Cancel'),
+            h('button', { class: 'btn danger', id: 'wipe-ok', on: { click: () => {
+              try { for (const k of Object.keys(localStorage)) if (k.startsWith('saferaah')) localStorage.removeItem(k); } catch { /* storage blocked */ }
+              location.reload();
+            } } }, 'Delete'))));
+      } } }, 'Delete my data on this phone'),
       h('h3', null, 'Voice guidance'),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', id: 'voice-setting', checked: st.voice, on: { change: (e: Event) => { S.settings = save({ voice: (e.target as HTMLInputElement).checked }); } } }),
         'Speak the turns during a journey'),
@@ -1591,10 +1609,11 @@ async function showTrack(shareId: string) {
       clear(sheet, h('div', { class: 'pad' }, h('h2', null, 'Trip not available'), h('p', null, (err as Error).message)));
       return false;
     }
-    smap.showRoutes([{ coords: d.route, tier: 'green', dangerSpots: [] } as unknown as WorkerRoute], 0);
-    smap.setEndpoints(d.route[0], d.dest);
-    if (d.last) smap.setMe([d.last.lon, d.last.lat], d.last.acc ?? 0);
-    if (first) { smap.fit(d.route, fitPad()); first = false; }
+    if (d.route.length > 1) smap.showRoutes([{ coords: d.route, tier: 'green', dangerSpots: [] } as unknown as WorkerRoute], 0);
+    else smap.clearRoutes();
+    smap.setEndpoints(d.route[0], d.dest ?? undefined);
+    if (d.last) smap.setMe([d.last.lon, d.last.lat], d.last.acc ?? 0); else smap.setMe(undefined);
+    if (first && d.route.length > 1) { smap.fit(d.route, fitPad()); first = false; }
     const statusText: Record<string, string> = { active: 'On the way', arrived: 'Reached safely', ended: 'Trip ended', sos: 'SOS: needs help now', expired: 'Trip expired' };
     const eta = new Date(d.startedAt + d.etaS * 1000);
     clear(sheet, h('div', { class: 'pad' },
@@ -1602,7 +1621,8 @@ async function showTrack(shareId: string) {
       d.status === 'sos' ? h('a', { class: 'btn danger wide big', href: telLink('112') }, 'Call 112') : null,
       h('p', null, d.status === 'arrived' ? `Arrived at ${clockText(new Date(d.arrivedAt))}.` : `Expected by ${clockText(eta)}.`),
       d.last ? h('p', { class: 'meta' }, `Last seen ${Math.max(0, Math.round((Date.now() - d.last.t) / 60000))} min ago.`) : h('p', { class: 'meta' }, 'Waiting for the first location…'),
-      h('p', { class: 'fine' }, 'This page updates every 10 seconds.')));
+      d.status === 'active' || d.status === 'sos' ? h('p', { class: 'fine' }, 'This page updates every 10 seconds.')
+        : h('p', { class: 'fine' }, '🔒 The trip has ended, so its location data has been deleted.')));
     return d.status === 'active' || d.status === 'sos';
   };
   if (await draw()) { const t = setInterval(async () => { if (!(await draw())) clearInterval(t); }, 10000); }

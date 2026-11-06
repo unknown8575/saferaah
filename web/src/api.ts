@@ -55,8 +55,8 @@ export const api = {
     call<{ ok: boolean; smsSent: number }>('POST', `api/journeys/${j.id}/sos`, { token: j.token, contacts, message }),
   notify: (j: JourneyHandle, contacts: string[], message: string) =>
     call<{ ok: boolean; smsSent: number }>('POST', `api/journeys/${j.id}/notify`, { token: j.token, contacts, message }),
-  review: (journeyId: string, reviewToken: string, rating: number, tags: string[], comment: string) =>
-    call<{ ok: boolean }>('POST', 'api/reviews', { journeyId, reviewToken, rating, tags, comment }),
+  review: (journeyId: string, reviewToken: string, rating: number, tags: string[]) =>
+    call<{ ok: boolean }>('POST', 'api/reviews', { journeyId, reviewToken, rating, tags }),
   share: (shareId: string) => call<any>('GET', `api/share/${encodeURIComponent(shareId)}`),
   reroute: (j: JourneyHandle, route: LonLat[], edges: number[], etaS: number) =>
     call<{ ok: boolean }>('POST', `api/journeys/${j.id}/route`, { token: j.token, route, edges, etaS }),
@@ -92,6 +92,13 @@ function dist(a: [number, number], b: [number, number]) {
 }
 const HOURS: Record<string, number> = { dark: 12, deserted: 3, harassment: 6, drunk: 3, followed: 2, dogs: 6, police: 2 };
 
+/** A one-way id for the shared store, so reports cannot be traced back to this phone's id. */
+async function anonId(): Promise<string> {
+  const data = new TextEncoder().encode(`saferaah-preview:${deviceId()}`);
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return [...h.slice(0, 10)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export const live = {
   async list(bbox: [number, number, number, number]): Promise<{ now: number; reports: LiveReport[] }> {
     if (isOnline() || !store) return api.reports(bbox);
@@ -119,7 +126,7 @@ export const live = {
   },
   async report(kind: ReportKind, spot: LonLat, at: { lon: number; lat: number; acc: number }) {
     if (isOnline() || !store) return api.report(kind, spot, at);
-    const now = Date.now(), dev = deviceId();
+    const now = Date.now(), dev = await anonId();
     if (dist(spot, [at.lon, at.lat]) > 300 + Math.min(200, at.acc)) throw new Error('Report only places near where you are');
     const mine = await store.collection('reports').where('by', '==', dev).where('createdAt', '>', now - 3600000).limit(10).get();
     if (mine.size >= 6) throw new Error('Too many reports in the last hour');
@@ -138,7 +145,8 @@ export const live = {
     const r = await store.doc(`reports/${id}`).get();
     if (!r.exists || r.data().expiresAt <= Date.now()) throw new Error('Report has expired');
     if (dist([r.data().lon, r.data().lat], [at.lon, at.lat]) > 500 + Math.min(200, at.acc)) throw new Error('Only people near the spot can confirm it');
-    await store.doc(`votes/${id}_${deviceId()}`).set({ report: id, device: deviceId(), still, at: Date.now() });
+    const dev = await anonId();
+    await store.doc(`votes/${id}_${dev}`).set({ report: id, device: dev, still, at: Date.now() });
     return { ok: true };
   },
 };

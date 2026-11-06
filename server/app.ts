@@ -1,6 +1,6 @@
 // SafeRaah API + static file server (plain node:http, no framework).
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -20,6 +20,20 @@ export interface AppOptions {
   now?: () => number;
   rateLimitPerMin?: number;
 }
+
+/**
+ * Privacy (see docs/10-privacy.md):
+ *  - GPS points of a trip are kept only while the trip is running (for the live link and
+ *    to verify the trip) and are deleted the moment it ends.
+ *  - At the end the route, destination and name are erased too; what is left (status and
+ *    the list of street segments, needed for the optional review) is deleted after the
+ *    review, or after REVIEW_WINDOW_MS if the traveller does not answer.
+ *  - A review keeps no trip, no comment and no device id: each street gets a vote under a
+ *    one-way pseudonym that cannot be linked to reports or trips.
+ *  - Live reports are deleted when they expire.
+ */
+export const REVIEW_WINDOW_MS = 60 * 60 * 1000;
+export const ABANDONED_TRIP_MS = 12 * 3600 * 1000;
 
 class HttpError extends Error {
   constructor(readonly status: number, msg: string) { super(msg); }
@@ -69,6 +83,28 @@ export function createApp(opts: AppOptions): Server {
     catch { throw new HttpError(400, 'Invalid JSON'); }
   }
 
+  // one-way pseudonyms: the same phone gets unrelated ids in different tables
+  const secret = (() => {
+    db.exec('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
+    const row = db.prepare("SELECT v FROM meta WHERE k = 'secret'").get() as { v: string } | undefined;
+    if (row) return row.v;
+    const v = randomBytes(32).toString('hex');
+    db.prepare("INSERT INTO meta (k, v) VALUES ('secret', ?)").run(v);
+    return v;
+  })();
+  const pseudo = (purpose: string, dev: string) => createHmac('sha256', secret).update(`${purpose}:${dev}`).digest('base64url').slice(0, 22);
+
+  /** Delete trip data that is no longer needed. Runs every few minutes and before each response that could expose it. */
+  function purge() {
+    const t = now();
+    db.prepare(`DELETE FROM journeys WHERE (status != 'active' AND status != 'sos' AND COALESCE(ended_at, 0) < ?)
+      OR started_at < ?`).run(t - REVIEW_WINDOW_MS, t - ABANDONED_TRIP_MS);
+    db.prepare('DELETE FROM reports WHERE expires_at <= ?').run(t);
+  }
+  purge();
+  const purgeTimer = setInterval(purge, 5 * 60 * 1000);
+  purgeTimer.unref?.();
+
   function device(req: IncomingMessage): string {
     const d = String(req.headers['x-device-id'] ?? '');
     if (!/^[A-Za-z0-9-]{16,64}$/.test(d)) throw new HttpError(400, 'Missing or invalid x-device-id header');
@@ -78,8 +114,12 @@ export function createApp(opts: AppOptions): Server {
   function journeyFor(id: string, token: string): any {
     const j = db.prepare('SELECT * FROM journeys WHERE id = ?').get(id) as any;
     if (!j) throw new HttpError(404, 'Journey not found');
-    if (typeof token !== 'string' || token !== j.token) throw new HttpError(403, 'Bad journey token');
+    if (typeof token !== 'string' || !j.token || token !== j.token) throw new HttpError(403, 'Bad journey token');
     return j;
+  }
+  /** after a trip ends, no more locations are accepted for it */
+  function stillTravelling(j: any) {
+    if (j.status !== 'active' && j.status !== 'sos') throw new HttpError(409, 'This trip has ended');
   }
 
   function monitorFor(j: any): JourneyMonitor {
@@ -120,6 +160,7 @@ export function createApp(opts: AppOptions): Server {
     'POST /api/journeys/([\\w-]+)/fixes': async (req, m) => {
       const b = await body(req);
       const j = journeyFor(m[1], b.token);
+      stillTravelling(j);
       rateLimit('f:' + j.id);
       if (!Array.isArray(b.fixes) || b.fixes.length > 500) throw new HttpError(400, 'Invalid fixes');
       const ins = db.prepare('INSERT OR IGNORE INTO fixes (journey_id, t, lon, lat, acc) VALUES (?,?,?,?,?)');
@@ -136,12 +177,17 @@ export function createApp(opts: AppOptions): Server {
     'POST /api/journeys/([\\w-]+)/finish': async (req, m) => {
       const b = await body(req);
       const j = journeyFor(m[1], b.token);
+      stillTravelling(j);
       const mon = monitorFor(j);
       const el = reviewEligibility(mon);
       if (j.simulated) { el.eligible = false; el.reasons.unshift('this was a demo trip with simulated movement'); }
       const reviewToken = el.eligible ? randomBytes(18).toString('base64url') : null;
-      db.prepare(`UPDATE journeys SET status = ?, arrived_at = ?, eligible = ?, coverage = ?, review_token = ? WHERE id = ?`)
-        .run(mon.arrivedAt ? 'arrived' : 'ended', mon.arrivedAt, el.eligible ? 1 : 0, el.coverage, reviewToken, j.id);
+      // the trip is over: GPS points, route, destination and name are erased now
+      db.prepare('DELETE FROM fixes WHERE journey_id = ?').run(j.id);
+      db.prepare(`UPDATE journeys SET status = ?, arrived_at = ?, ended_at = ?, eligible = ?, coverage = ?, review_token = ?,
+          route_json = '[]', dest_lon = 0, dest_lat = 0, traveller_name = NULL,
+          edges_json = CASE WHEN ? THEN edges_json ELSE '[]' END WHERE id = ?`)
+        .run(mon.arrivedAt ? 'arrived' : 'ended', mon.arrivedAt, now(), el.eligible ? 1 : 0, el.coverage, reviewToken, el.eligible ? 1 : 0, j.id);
       return { arrived: !!mon.arrivedAt, eligible: el.eligible, coverage: el.coverage, reasons: el.reasons, reviewToken };
     },
 
@@ -171,6 +217,7 @@ export function createApp(opts: AppOptions): Server {
       // re-routed mid-journey: verification and review use the new route from here on
       const b = await body(req);
       const j = journeyFor(m[1], b.token);
+      stillTravelling(j);
       if (!Array.isArray(b.route) || b.route.length < 2 || b.route.length > 20000 || !b.route.every(isLonLat))
         throw new HttpError(400, 'Invalid route');
       if (!Array.isArray(b.edges) || b.edges.length > 50000 || !b.edges.every((e: unknown) => Number.isInteger(e) && (e as number) >= 0))
@@ -183,7 +230,7 @@ export function createApp(opts: AppOptions): Server {
     },
 
     'POST /api/reports': async (req) => {
-      const dev = device(req);
+      const dev = pseudo('report', device(req));
       const b = await body(req);
       if (!isReportKind(b.kind)) throw new HttpError(400, 'Unknown report type');
       if (!isLonLat([b.lon, b.lat]) || !isLonLat([b.at?.lon, b.at?.lat])) throw new HttpError(400, 'Location needed');
@@ -209,7 +256,7 @@ export function createApp(opts: AppOptions): Server {
     },
 
     'POST /api/reports/([\\w-]+)/vote': async (req, m) => {
-      const dev = device(req);
+      const dev = pseudo('report', device(req));
       rateLimit('rv:' + dev);
       const b = await body(req);
       const r = db.prepare('SELECT * FROM reports WHERE id = ?').get(m[1]) as any;
@@ -239,8 +286,9 @@ export function createApp(opts: AppOptions): Server {
       const dev = device(req);
       rateLimit('r:' + dev);
       const b = await body(req);
+      purge();
       const j = db.prepare('SELECT * FROM journeys WHERE id = ?').get(String(b.journeyId)) as any;
-      if (!j) throw new HttpError(404, 'Journey not found');
+      if (!j) throw new HttpError(404, 'This trip has ended and its data was deleted');
       if (!j.eligible || !j.review_token || b.reviewToken !== j.review_token)
         throw new HttpError(403, 'This journey is not verified for a review');
       if (j.device !== dev) throw new HttpError(403, 'Only the traveller can review this journey');
@@ -249,16 +297,18 @@ export function createApp(opts: AppOptions): Server {
       if (typeof rating !== 'number' || !Number.isInteger(rating) || rating < 1 || rating > 5)
         throw new HttpError(400, 'Rating must be a whole number from 1 to 5');
       const tags = Array.isArray(b.tags) ? b.tags.filter((t: unknown) => typeof t === 'string' && TAGS.has(t)).slice(0, 8) : [];
-      const comment = typeof b.comment === 'string' ? b.comment.slice(0, 500) : null;
       const t = now();
+      // round the time to the day so a vote cannot be matched to a trip by its timestamp
+      const day = Math.floor(t / 86400000) * 86400000;
+      const voter = pseudo('vote', dev);
       db.exec('BEGIN');
       try {
-        db.prepare('INSERT INTO reviews (journey_id, device, rating, tags, comment, created_at) VALUES (?,?,?,?,?,?)')
-          .run(j.id, dev, rating, JSON.stringify(tags), comment, t);
-        const up = db.prepare(`INSERT INTO edge_votes (graph_version, edge, device, rating, updated_at) VALUES (?,?,?,?,?)
-          ON CONFLICT(graph_version, edge, device) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at`);
-        for (const e of new Set<number>(JSON.parse(j.edges_json))) up.run(j.graph_version, e, dev, rating, t);
-        db.prepare('UPDATE journeys SET reviewed = 1 WHERE id = ?').run(j.id);
+        const up = db.prepare(`INSERT INTO edge_votes (graph_version, edge, device, rating, tags, updated_at) VALUES (?,?,?,?,?,?)
+          ON CONFLICT(graph_version, edge, device) DO UPDATE SET rating = excluded.rating, tags = excluded.tags, updated_at = excluded.updated_at`);
+        const tagStr = tags.join(',');
+        for (const e of new Set<number>(JSON.parse(j.edges_json))) up.run(j.graph_version, e, voter, rating, tagStr, day);
+        // only a bare "reached safely" status stays for the family's link, until the hourly clean-up
+        db.prepare(`UPDATE journeys SET edges_json = '[]', review_token = NULL, reviewed = 1, device = '', token = '' WHERE id = ?`).run(j.id);
         db.exec('COMMIT');
       } catch (err) { db.exec('ROLLBACK'); throw err; }
       return { ok: true };
@@ -281,14 +331,15 @@ export function createApp(opts: AppOptions): Server {
     },
 
     'GET /api/share/([\\w-]+)': async (_req, m) => {
+      purge();
       const j = db.prepare('SELECT * FROM journeys WHERE share_id = ?').get(m[1]) as any;
-      if (!j) throw new HttpError(404, 'Shared trip not found');
+      if (!j) throw new HttpError(404, 'This trip has ended and its location data was deleted');
       const last = db.prepare('SELECT t, lon, lat, acc FROM fixes WHERE journey_id = ? ORDER BY t DESC LIMIT 1').get(j.id);
       const stale = now() - j.started_at > 12 * 3600 * 1000;
       return {
         status: stale && j.status === 'active' ? 'expired' : j.status, mode: j.mode, name: j.traveller_name,
-        route: JSON.parse(j.route_json), dest: [j.dest_lon, j.dest_lat], etaS: j.eta_s,
-        startedAt: j.started_at, arrivedAt: j.arrived_at, last,
+        route: JSON.parse(j.route_json), dest: j.dest_lon || j.dest_lat ? [j.dest_lon, j.dest_lat] : null, etaS: j.eta_s,
+        startedAt: j.started_at, arrivedAt: j.arrived_at, last: last ?? null,
       };
     },
   };

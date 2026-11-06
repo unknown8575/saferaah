@@ -51,7 +51,7 @@ The same six animations are inside the app under **☰ → How to use SafeRaah**
 ![Arrive and review](../web/public/help/review.gif)
 
 * When you enter a small circle around the destination (10 m, wider if GPS is weak), you **arrive**. Tap **Tell … you reached** to send the message.
-* Rate how safe the streets felt and add quick tags. Reviews are accepted only from **verified trips** — you must have actually travelled at least 80% of the route — and a street changes colour only after **5 different travellers** warn about it (10 to mark it safer).
+* Then, only if you want, two quick questions: how safe the route felt (1–5) and what you noticed. They are anonymous: your trip's location was already deleted when you arrived. Reviews are accepted only from **verified trips** — you must have actually travelled at least 80% of the route — and a street changes colour only after **5 different travellers** warn about it (10 to mark it safer).
 
 ## Live on the map
 * **⚠ Report** (right side): No street lights, Deserted street, Harassment / eve-teasing, Drunk group, Someone following people, Aggressive stray dogs, or Police patrol here. You can only report where you are. Reports are anonymous, show as pins for everyone, and expire after 2–12 hours. Routes for everyone avoid the spot until then.
@@ -61,6 +61,9 @@ The same six animations are inside the app under **☰ → How to use SafeRaah**
 
 ## Menu (☰)
 Safe places near me, Trusted contacts & settings (up to 5 people, kept on your phone; *Simulate my movement* to try without walking), Map layers, this guide, and one-tap calls to 112 and 1091.
+
+## Privacy
+Your location stays on your phone. During a trip it goes to the server only for the live link and the arrival check, and it is deleted the moment the trip ends. Contacts and settings never leave your phone. Full details: [10-privacy.md](10-privacy.md).
 
 ## Good to know
 * Coverage: all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad. Map data © OpenStreetMap contributors.

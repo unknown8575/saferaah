@@ -25,20 +25,13 @@ export function openDb(path: string): DatabaseSync {
       review_token TEXT,
       reviewed INTEGER NOT NULL DEFAULT 0,
       traveller_name TEXT,
-      simulated INTEGER NOT NULL DEFAULT 0
+      simulated INTEGER NOT NULL DEFAULT 0,
+      ended_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS fixes (
       journey_id TEXT NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
       t INTEGER NOT NULL, lon REAL NOT NULL, lat REAL NOT NULL, acc REAL NOT NULL,
       PRIMARY KEY (journey_id, t)
-    );
-    CREATE TABLE IF NOT EXISTS reviews (
-      journey_id TEXT PRIMARY KEY REFERENCES journeys(id),
-      device TEXT NOT NULL,
-      rating INTEGER NOT NULL,
-      tags TEXT NOT NULL,
-      comment TEXT,
-      created_at INTEGER NOT NULL
     );
     -- one vote per device per segment (latest wins), so a single person
     -- walking the same road 20 times still counts once
@@ -47,6 +40,7 @@ export function openDb(path: string): DatabaseSync {
       edge INTEGER NOT NULL,
       device TEXT NOT NULL,
       rating INTEGER NOT NULL,
+      tags TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (graph_version, edge, device)
     );
@@ -72,5 +66,10 @@ export function openDb(path: string): DatabaseSync {
   // migrate older databases
   const cols = (db.prepare("PRAGMA table_info(journeys)").all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes('simulated')) db.exec('ALTER TABLE journeys ADD COLUMN simulated INTEGER NOT NULL DEFAULT 0');
+  const vcols = (db.prepare("PRAGMA table_info(edge_votes)").all() as { name: string }[]).map((c) => c.name);
+  if (!vcols.includes('tags')) db.exec("ALTER TABLE edge_votes ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
+  if (!cols.includes('ended_at')) db.exec('ALTER TABLE journeys ADD COLUMN ended_at INTEGER');
+  // older versions kept reviews with comments linked to trips; nothing like that is kept now
+  db.exec('DROP TABLE IF EXISTS reviews');
   return db;
 }

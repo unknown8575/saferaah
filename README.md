@@ -37,10 +37,14 @@ Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-te
 
 ```bash
 npm run typecheck
-npm test               # 82 unit + API tests (vitest)
+npm test               # 86 unit + API tests (vitest)
 npm run build && npm run test:e2e   # 19 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
 python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web/public/help/
 ```
+
+## Privacy
+
+Location stays on the phone. During a trip the server receives GPS points only for the live link and the arrival check, and deletes them, the route, destination and name the moment the trip ends; the optional two questions afterwards are stored as anonymous per-street votes. Details: [docs/10-privacy.md](docs/10-privacy.md).
 
 ## Website (GitHub Pages)
 

@@ -52,6 +52,7 @@
 | FR-27 | Directions: start = your location by default, swap, a time for every travel mode, the fastest route selected first, every route showing its precautions (card line, full list in details) and a time label on the map; the user decides. |
 | FR-28 | Navigation: heading-up follow mode with re-centre and compass; leaving the route re-plans from the current position keeping the user's choice (fastest/safest) and updates the live link; every 5 min offer a clearly safer route if one appears. |
 | FR-29 | Spoken turn-by-turn guidance (English) with mute; a navigation island showing next turn, distance and ETA; in the Android app an ongoing navigation notification promoted to an Android 16 Live Update. |
+| FR-30 | Privacy: location stays on the phone; trip GPS points, route, destination and name are deleted when the trip ends; after-trip questions (2, optional) are anonymous per-street votes; reports and leftovers are purged on schedule; user can wipe all data on the phone. |
 
 ## 3. Non-functional requirements
 | ID | Requirement |

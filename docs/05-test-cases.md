@@ -133,4 +133,8 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-126 | U normal | Precautions | headline for every route; risky night walk suggests auto/cab and sharing; spots listed by reason | FR-27 |
 | TC-127 | U normal | Spoken distances | rounded like people say them (80 metres, 250 metres, 1.5 kilometres) | FR-29 |
 | TC-109 | E normal | Simulated night walk with speech captured | "Starting your trip…", "In N metres, turn …", then the turn itself; island shows distance; tap expands with arrival time; mute stops speech and is remembered | FR-29 |
+| TC-130 | A normal/edge | Trip ends | GPS points deleted; route, destination and name erased; share shows no location; late fixes and a second finish refused (409) | FR-30 |
+| TC-131 | A normal | Answer the two questions | trip erased (bare status only); votes under a pseudonym, day-rounded; no reviews/comments table | FR-30 |
+| TC-132 | A normal | Report + vote from one phone | pseudonyms differ from the phone id and from each other | FR-30 |
+| TC-133 | A edge | Clean-up | unanswered trip gone after 1 h, abandoned trip after 12 h, expired reports and all fixes gone | FR-30 |
 
