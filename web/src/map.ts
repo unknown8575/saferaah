@@ -43,7 +43,7 @@ export function baseStyle(theme: Theme, base: string, bounds: [number, number, n
   const glyphBase = new URL('fonts/', new URL(base, location.href)).href;
   return {
     version: 8,
-    glyphs: glyphBase + '{fontstack}/{range}.pbf',
+    glyphs: glyphBase + '{fontstack}/{range}.pbf', // one bundled font stack, named "noto" (Noto Sans Regular)
     sources: {
       base: { type: 'vector', tiles: ['srt://{z}/{x}/{y}'], minzoom: 11, maxzoom: 15, bounds,
         attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors' },
@@ -76,11 +76,11 @@ export function baseStyle(theme: Theme, base: string, bounds: [number, number, n
       ]),
       { id: 'road-label', type: 'symbol', source: 'base', 'source-layer': 'roads', minzoom: 15,
         filter: ['!=', ['get', 'name'], ''],
-        layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 11.5, 'text-max-angle': 30 },
+        layout: { 'symbol-placement': 'line', 'text-field': ['get', 'name'], 'text-font': ['noto'], 'text-size': 11.5, 'text-max-angle': 30 },
         paint: { 'text-color': p.label, 'text-halo-color': p.halo, 'text-halo-width': 1.6 } },
       { id: 'area-label', type: 'symbol', source: 'base', 'source-layer': 'labels',
         filter: ['<=', ['get', 'rank'], 3],
-        layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'],
+        layout: { 'text-field': ['get', 'name'], 'text-font': ['noto'],
           'text-size': ['match', ['get', 'kind'], 'area', 13, 11.5], 'text-max-width': 8, 'text-padding': 6 },
         paint: { 'text-color': p.label, 'text-halo-color': p.halo, 'text-halo-width': 1.8 } },
     ] as never,

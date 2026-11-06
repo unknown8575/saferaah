@@ -109,7 +109,7 @@ console.log(`basemap.bin: ${count} tiles, ${(off / 1e6).toFixed(1)} MB`);
 // Latin font glyphs for labels (Noto Sans, OFL) — served locally, works offline
 const require = createRequire(import.meta.url);
 const glyphDir = join(dirname(require.resolve('smp-noto-glyphs/package.json')), 'fixtures/glyphs');
-const fontOut = join(outDir, '..', 'fonts', 'Noto Sans Regular');
+const fontOut = join(outDir, '..', 'fonts', 'noto'); // one font, so no {fontstack} folder (no spaces in URLs)
 mkdirSync(fontOut, { recursive: true });
 for (const f of readdirSync(glyphDir)) {
   const range = f.replace('.pbf.gz', '');

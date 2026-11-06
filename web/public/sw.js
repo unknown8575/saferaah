@@ -3,7 +3,7 @@
 const CACHE = 'saferaah-v1';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg',
   'data/graph.bin', 'data/pois.json', 'data/search.json', 'data/basemap.bin', 'data/version.json',
-  'fonts/Noto%20Sans%20Regular/0-255.pbf', 'fonts/Noto%20Sans%20Regular/256-511.pbf'];
+  'fonts/noto/0-255.pbf', 'fonts/noto/256-511.pbf'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
