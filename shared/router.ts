@@ -24,10 +24,10 @@ export const MAX_DETOUR = 1.6;
 
 export type Tier = 'darkred' | 'red' | 'yellow' | 'green';
 export const TIER_INFO: Record<Tier, { color: string; label: string; short: string }> = {
-  darkred: { color: '#8b0000', label: 'High risk', short: 'Avoid if you can' },
-  red: { color: '#e03131', label: 'Unsafe', short: 'Risky stretches' },
-  yellow: { color: '#f2a900', label: 'Take care', short: 'Medium risk' },
-  green: { color: '#1f9d55', label: 'Low risk', short: 'Busy, open, watched' },
+  darkred: { color: '#a3161f', label: 'High risk', short: 'Avoid if you can' },
+  red: { color: '#ff3b30', label: 'Unsafe', short: 'Risky stretches' },
+  yellow: { color: '#ff9f0a', label: 'Take care', short: 'Medium risk' },
+  green: { color: '#30b158', label: 'Low risk', short: 'Busy, open, watched' },
 };
 /** Absolute thresholds on the route's time-weighted mean risk. */
 export function tierOf(meanRisk: number, worstStretch: number): Tier {

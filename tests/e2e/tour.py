@@ -81,7 +81,7 @@ with sync_playwright() as p:
     shot(page, '09-arrived')
     if page.locator('.star').count():
         page.locator('.star').nth(3).click()
-        page.get_by_role('button', name='💡 Well lit').click()
+        page.get_by_role('button', name='Well lit', exact=True).click()
         shot(page, '10-review')
         page.locator('#submit-review').click()
         page.wait_for_timeout(800)

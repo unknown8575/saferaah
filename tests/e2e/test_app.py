@@ -60,7 +60,7 @@ def interp(coords, step_m):
 def tc90(b, base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
     page.goto(base + '/'); page.wait_for_selector('.intro', timeout=20000)
-    page.get_by_role('button', name='Add a contact').click()
+    page.get_by_role('button', name='Add a trusted contact').click()
     page.get_by_label('Contact name').fill('Maa')
     page.get_by_label('Contact mobile number').fill('12345')
     page.locator('#add-contact').click()
@@ -126,7 +126,7 @@ def tc93(b, base):
     expect(page.locator('.prec-box .prec-head')).to_be_visible()
     expect(page.locator('.facts li').first).to_contain_text('main roads')
     expect(page.locator('.havens li').first).to_be_visible()
-    expect(page.get_by_role('button', name='✓ Maa')).to_be_visible()
+    expect(page.get_by_role('button', name='Maa', exact=True)).to_be_visible()
     page.locator('details.steps summary').click()
     assert page.locator('details.steps li').count() >= 3
     ctx.close()
@@ -159,7 +159,7 @@ def tc94(b, base):
     assert href.startswith('sms:+919876543210') and 'reached' in href, href
     page.wait_for_selector('.star', timeout=10000)
     page.locator('.star').nth(3).click()
-    page.get_by_role('button', name='💡 Well lit').click()
+    page.get_by_role('button', name='Well lit', exact=True).click()
     page.locator('#submit-review').click()
     expect(page.locator('.review .ok-msg')).to_contain_text('Thanks', timeout=10000)
     viewer.reload()

@@ -138,3 +138,4 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-132 | A normal | Report + vote from one phone | pseudonyms differ from the phone id and from each other | FR-30 |
 | TC-133 | A edge | Clean-up | unanswered trip gone after 1 h, abandoned trip after 12 h, expired reports and all fixes gone | FR-30 |
 
+| TC-134 | A normal | One person's votes, then a year passes | every street vote has a different pseudonym; all deleted after 365 days | FR-30 |

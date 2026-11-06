@@ -9,6 +9,7 @@ import { TIER_INFO, type Tier } from '../../shared/router.ts';
 import { CAT_INFO, type Poi, type PoiCat } from '../../shared/places.ts';
 import type { LonLat } from '../../shared/geo.ts';
 import type { WorkerRoute } from './worker.ts';
+import { icon } from './icons.ts';
 
 maplibregl.setWorkerUrl(mlWorkerUrl);
 
@@ -55,10 +56,11 @@ export async function loadBasemap(base: string): Promise<{ bounds: [number, numb
 type FeatureCollection = { type: 'FeatureCollection'; features: unknown[] };
 export type Theme = 'day' | 'night';
 const PAL = {
-  day: { bg: '#eceef3', water: '#b7cbe6', green: '#d2e6cb', wood: '#c3dcb9', landuse: '#e4e2ea', bldg: '#dcdde5', bldgLine: '#cdcfd9', rail: '#9a9cb0',
-    major: '#ffffff', majorCase: '#b4b7c8', minor: '#ffffff', minorCase: '#d0d2dc', path: '#9ea2b6', service: '#f7f7fa', label: '#3b3a5c', halo: '#ffffff' },
-  night: { bg: '#141433', water: '#1d2a52', green: '#142a24', wood: '#11251f', landuse: '#18183a', bldg: '#1c1c40', bldgLine: '#242452', rail: '#3e3e6e',
-    major: '#8e8cbc', majorCase: '#2c2b55', minor: '#5d5b84', minorCase: '#141433', path: '#3a3963', service: '#3c3b62', label: '#c9c8ea', halo: '#141433' },
+  // calm, Apple-Maps-like base so the safety colours are the only strong colour on screen
+  day: { bg: '#f2f2ef', water: '#a9d1f2', green: '#cfe7c4', wood: '#c4e0b8', landuse: '#ecebe6', bldg: '#e5e4df', bldgLine: '#d8d6d0', rail: '#b9b8b3',
+    major: '#ffffff', majorCase: '#d5d4cf', minor: '#ffffff', minorCase: '#e1e0db', path: '#c2c1bb', service: '#fbfbf9', label: '#3c3c43', halo: '#ffffff' },
+  night: { bg: '#1c1c1e', water: '#1b2b40', green: '#1e2f22', wood: '#1b2a1f', landuse: '#222224', bldg: '#2a2a2d', bldgLine: '#333337', rail: '#48484c',
+    major: '#5a5a60', majorCase: '#1c1c1e', minor: '#3d3d42', minorCase: '#1c1c1e', path: '#3a3a3f', service: '#38383d', label: '#d1d1d6', halo: '#1c1c1e' },
 };
 const NAME = ['coalesce', ['get', 'name:latin'], ['get', 'name_en'], ['get', 'name']];
 const MAJOR = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary'];
@@ -179,6 +181,8 @@ export class SafeMap {
   ready: Promise<void>;
   private vis = { safety: true, traffic: false, pois: true };
   private safetyDim = false;
+  private routeKey = '';
+  private drawAnim = 0;
 
   constructor(el: HTMLElement, private base: string, private bounds: [number, number, number, number]) {
     this.map = new maplibregl.Map({
@@ -201,8 +205,8 @@ export class SafeMap {
     m.addSource('safety', { type: 'geojson', data: empty });
     m.addLayer({ id: 'safety', type: 'line', source: 'safety', minzoom: 13.5,
       layout: { 'line-cap': 'round', 'line-join': 'round', visibility: this.vis.safety ? 'visible' : 'none' },
-      paint: { 'line-color': RISK_COLOR as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 13.5, 1.6, 16, 4, 18, 8],
-        'line-opacity': this.safetyDim ? 0.3 : 0.7 } });
+      paint: { 'line-color': RISK_COLOR as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 13.5, 1, 16, 2.6, 18, 6],
+        'line-opacity': this.safetyDim ? 0.25 : 0.55 } });
     m.addSource('acc', { type: 'geojson', data: empty });
     m.addLayer({ id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#3d5afe', 'fill-opacity': 0.12 } });
     m.addLayer({ id: 'acc-line', type: 'line', source: 'acc', paint: { 'line-color': '#3d5afe', 'line-opacity': 0.35, 'line-width': 1 } });
@@ -268,7 +272,7 @@ export class SafeMap {
   dimSafety(dim: boolean) {
     if (this.safetyDim === dim) return;
     this.safetyDim = dim;
-    this.ready.then(() => this.map.getLayer('safety') && this.map.setPaintProperty('safety', 'line-opacity', dim ? 0.3 : 0.7));
+    this.ready.then(() => this.map.getLayer('safety') && this.map.setPaintProperty('safety', 'line-opacity', dim ? 0.25 : 0.55));
   }
   setSafety(fc: FeatureCollection) { this.setOverlay('safety', fc); }
 
@@ -291,22 +295,39 @@ export class SafeMap {
   }
 
   showRoutes(routes: WorkerRoute[], selected: number, opts: { callouts?: boolean; onSelect?: (i: number) => void } = {}) {
-    const feats = routes.map((r, i) => ({
+    const build = (frac: number): FeatureCollection => ({ type: 'FeatureCollection', features: routes.map((r, i) => ({
       type: 'Feature' as const,
-      geometry: { type: 'LineString' as const, coordinates: r.coords },
+      geometry: { type: 'LineString' as const, coordinates: frac >= 1 ? r.coords : r.coords.slice(0, Math.max(2, Math.ceil(r.coords.length * frac))) },
       properties: { i, sel: i === selected ? 1 : 0, z: i === selected ? 10 : i, color: TIER_INFO[r.tier as Tier].color },
-    }));
-    this.setOverlay('routes', { type: 'FeatureCollection', features: feats });
+    })) });
+    // new routes draw themselves from start to destination; changing the selection does not
+    const key = routes.map((r) => `${r.coords.length}:${Math.round(r.timeS)}`).join('|');
+    const animate = !!opts.callouts && key !== this.routeKey && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.routeKey = key;
+    cancelAnimationFrame(this.drawAnim);
+    if (animate) {
+      const t0 = performance.now();
+      const step = (t: number) => {
+        const k = Math.min(1, (t - t0) / 800);
+        this.setOverlay('routes', build(1 - Math.pow(1 - k, 3)));
+        if (k < 1) this.drawAnim = requestAnimationFrame(step);
+      };
+      this.drawAnim = requestAnimationFrame(step);
+    } else this.setOverlay('routes', build(1));
     this.clearMarkers();
     for (const c of this.callouts) c.remove();
     this.callouts = [];
     if (opts.callouts && routes.length) {
       routes.forEach((r, i) => {
         const el = document.createElement('button');
-        el.className = `callout tier-${r.tier}${i === selected ? ' sel' : ''}`;
+        el.className = `callout tier-${r.tier}${i === selected ? ' sel' : ''}${animate ? ' late' : ''}`;
         el.dataset.i = String(i);
-        const icon = r.tier === 'green' ? '✓' : r.tier === 'yellow' ? '!' : '⚠';
-        el.innerHTML = `<b>${escapeHtml(fmtMin(r.timeS))}</b><span class="ci">${icon}</span>`;
+        const ci = document.createElement('span');
+        ci.className = 'ci';
+        ci.appendChild(icon(r.tier === 'green' ? 'check' : 'alert', 11, 2.6));
+        const b = document.createElement('b');
+        b.textContent = fmtMin(r.timeS);
+        el.append(ci, b);
         el.setAttribute('aria-label', `Route ${i + 1}: ${fmtMin(r.timeS)}, ${TIER_INFO[r.tier as Tier].label}`);
         el.addEventListener('click', (e) => { e.stopPropagation(); opts.onSelect?.(i); });
         const mk = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -6] }).setLngLat(calloutPoint(routes, i)).addTo(this.map);
@@ -335,6 +356,8 @@ export class SafeMap {
   }
 
   clearRoutes() {
+    cancelAnimationFrame(this.drawAnim);
+    this.routeKey = '';
     this.setOverlay('routes', { type: 'FeatureCollection', features: [] });
     this.clearMarkers();
     for (const c of this.callouts) c.remove();
@@ -365,7 +388,7 @@ export class SafeMap {
     this.hitMarkers = hits.map((x, i) => {
       const el = document.createElement('button');
       el.className = `hit-pin${x.open ? '' : ' closed'}`;
-      el.textContent = x.icon;
+      el.appendChild(icon(x.icon, 16, 2));
       el.setAttribute('aria-label', x.label);
       el.addEventListener('click', (e) => { e.stopPropagation(); onClick?.(i); });
       return new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([x.lon, x.lat]).addTo(this.map);
@@ -378,7 +401,7 @@ export class SafeMap {
     this.reportMarkers = list.map((r) => {
       const el = document.createElement('button');
       el.className = `report-pin${r.danger ? '' : ' good'}`;
-      el.textContent = r.icon;
+      el.appendChild(icon(r.icon, 16, 2.1));
       el.dataset.id = r.id;
       el.setAttribute('aria-label', `Live report: ${r.label}`);
       el.addEventListener('click', (e) => { e.stopPropagation(); onClick(r.id, el); });

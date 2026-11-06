@@ -37,7 +37,7 @@ Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-te
 
 ```bash
 npm run typecheck
-npm test               # 86 unit + API tests (vitest)
+npm test               # 87 unit + API tests (vitest)
 npm run build && npm run test:e2e   # 19 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
 python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web/public/help/
 ```

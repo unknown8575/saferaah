@@ -1,7 +1,8 @@
 import './styles.css';
 import { h, clear, fmtDuration, fmtDist } from './dom.ts';
 import { SafeMap, loadBasemap, hasTraffic } from './map.ts';
-import { PlaceSearch, TYPE_ICON, type Entry, type Hit } from './search.ts';
+import { PlaceSearch, type Entry, type Hit } from './search.ts';
+import { icon, placeIcon, REPORT_ICON } from './icons.ts';
 import { load, save, normalisePhone, type Contact } from './store.ts';
 import { api, live, checkServer, isOnline, serverSms, initPreviewStore, liveAvailable, livePreview, type JourneyHandle } from './api.ts';
 import { gpsSource, simulatedSource, type PositionSource } from './location.ts';
@@ -98,6 +99,7 @@ function clockText(d: Date): string {
 }
 const TIER_RANK: Record<Tier, number> = { green: 0, yellow: 1, red: 2, darkred: 3 };
 const tierIcon = (t: Tier) => (t === 'green' ? '✓' : t === 'yellow' ? '!' : '⚠');
+const tierSvg = (t: Tier, size = 14) => icon(t === 'green' ? 'check' : 'alert', size, 2.2);
 
 // ---------- layout ----------
 const app = document.getElementById('app')!;
@@ -143,10 +145,18 @@ let search: PlaceSearch;
 let named: { name: string; lon: number; lat: number; type: string }[] = [];
 const wide = () => window.innerWidth >= 860;
 
+let enterTimer: ReturnType<typeof setTimeout>;
 function setView(v: View) {
   S.view = v;
   document.body.dataset.view = v;
+  const changed = !sheet.classList.contains(`v-${v}`);
   sheet.className = `v-${v}`; // also collapses an expanded sheet
+  // new screen: its content rises in once (re-renders within the same screen stay still)
+  if (changed) {
+    sheet.classList.add('enter');
+    clearTimeout(enterTimer);
+    enterTimer = setTimeout(() => sheet.classList.remove('enter'), 650);
+  }
   crosshair.hidden = v !== 'pick';
   sosBtn.hidden = v === 'track';
   smap?.dimSafety(['directions', 'details', 'journey'].includes(v));
@@ -156,7 +166,7 @@ function setView(v: View) {
 // ---------- boot ----------
 async function boot() {
   setView('home');
-  clear(sheet, h('div', { class: 'loading' }, h('div', { class: 'spinner' }), h('p', null, 'Loading the map of Delhi…')));
+  clear(sheet, h('div', { class: 'loading' }, h('span', { class: 'logo' }), h('div', { class: 'spinner' }), h('p', null, 'Loading the map of Delhi…')));
   try {
     const [ver, basemap, searchEntries] = await Promise.all([
       fetch(BASE + 'data/version.json').then((r) => r.json()).catch(() => ({ version: 'dev' })),
@@ -374,11 +384,11 @@ function placeAt(p: LonLat): Place {
 
 // ---------- top: search bar & chips ----------
 const CATS: { key: string; label: string; icon: string; cats: PoiCat[] }[] = [
-  { key: 'police', label: 'Police', icon: '👮', cats: ['police'] },
-  { key: 'hospital', label: 'Hospitals', icon: '🏥', cats: ['hospital', 'clinic'] },
-  { key: 'pharmacy', label: 'Medical stores', icon: '💊', cats: ['pharmacy'] },
-  { key: 'station', label: 'Metro', icon: '🚇', cats: ['station'] },
-  { key: 'fuel', label: 'Petrol pumps', icon: '⛽', cats: ['fuel'] },
+  { key: 'police', label: 'Police', icon: 'police', cats: ['police'] },
+  { key: 'hospital', label: 'Hospitals', icon: 'hospital', cats: ['hospital', 'clinic'] },
+  { key: 'pharmacy', label: 'Medical stores', icon: 'pharmacy', cats: ['pharmacy'] },
+  { key: 'station', label: 'Metro', icon: 'station', cats: ['station'] },
+  { key: 'fuel', label: 'Petrol pumps', icon: 'fuel', cats: ['fuel'] },
 ];
 
 function renderSearchTop() {
@@ -392,10 +402,10 @@ function renderSearchTop() {
     const near = myLonLat() ?? [smap.map.getCenter().lng, smap.map.getCenter().lat];
     const hits = search.query(q, 7, near as [number, number]);
     const items: HTMLElement[] = hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); openHit(x); } } },
-      h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type))));
+      h('span', { class: 'sic' }, icon(placeIcon(x.type), 18)), h('span', null, x.name), h('small', null, typeLabel(x.type))));
     if (q.length >= 2 && !hits.length) items.push(h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market, or tap the map.`));
     if (q.length < 2) items.push(...CATS.map((c) => h('li', { role: 'option', tabindex: 0, on: { click: () => { list.hidden = true; input.blur(); showCategory(c.key); } } },
-      h('span', { class: 'ic' }, c.icon), h('span', null, `${c.label} near you`))));
+      h('span', { class: 'sic' }, icon(c.icon, 18)), h('span', null, `${c.label} near you`))));
     clear(list, items);
     list.hidden = false;
   };
@@ -409,15 +419,15 @@ function renderSearchTop() {
   const hasPlace = S.view === 'place' || S.view === 'category';
   clear(top,
     h('div', { class: 'searchbar' },
-      h('button', { class: 'sb-btn', 'aria-label': 'Menu', id: 'menu', on: { click: () => openMenu() } }, h('span', { class: 'burger', 'aria-hidden': 'true' })),
+      h('button', { class: 'sb-btn', 'aria-label': 'Menu', id: 'menu', on: { click: () => openMenu() } }, icon('menu', 22)),
       input,
-      hasPlace ? h('button', { class: 'sb-btn', 'aria-label': 'Clear', on: { click: () => goHome() } }, '✕')
+      hasPlace ? h('button', { class: 'sb-btn', 'aria-label': 'Clear', on: { click: () => goHome() } }, icon('close', 20))
         : h('span', { class: 'logo', 'aria-hidden': 'true', title: 'SafeRaah' }),
       list),
     h('div', { class: 'catchips', role: 'toolbar', 'aria-label': 'Find nearby' },
       CATS.map((c) => h('button', { class: `chip cat${S.category?.key === c.key && S.view === 'category' ? ' on' : ''}`, 'data-cat': c.key,
         on: { click: () => (S.view === 'category' && S.category?.key === c.key ? goHome() : showCategory(c.key)) } },
-      h('span', { 'aria-hidden': 'true' }, c.icon), c.label))),
+      icon(c.icon, 17), c.label))),
   );
 }
 
@@ -446,11 +456,11 @@ function renderFabs() {
   const locState = myLonLat() ? (S.follow ? 'follow' : 'on') : S.loc.status === 'denied' ? 'off' : 'searching';
   clear(fabs,
     compassBtn,
-    v !== 'journey' ? h('button', { class: 'fab', id: 'layers-btn', 'aria-label': 'Map layers', title: 'Map layers', on: { click: () => openLayers() } }, h('span', { class: 'layers-ic', 'aria-hidden': 'true' })) : null,
-    h('button', { class: 'fab report-fab', id: 'report-btn', 'aria-label': 'Report something unsafe here', title: 'Report', on: { click: () => openReport() } }, '⚠'),
-    J ? (S.follow ? null : h('button', { class: 'fab wide-fab', id: 'recenter', on: { click: () => { S.follow = true; renderFabs(); if (S.myPos) followCamera(S.myPos); } } }, '➤ Re-centre'))
+    v !== 'journey' ? h('button', { class: 'fab', id: 'layers-btn', 'aria-label': 'Map layers', title: 'Map layers', on: { click: () => openLayers() } }, icon('layers', 22)) : null,
+    h('button', { class: 'fab report-fab', id: 'report-btn', 'aria-label': 'Report something unsafe here', title: 'Report', on: { click: () => openReport() } }, icon('alert', 22)),
+    J ? (S.follow ? null : h('button', { class: 'fab wide-fab', id: 'recenter', on: { click: () => { S.follow = true; renderFabs(); if (S.myPos) followCamera(S.myPos); } } }, icon('navigate', 18), 'Re-centre'))
       : h('button', { class: `fab locate ${locState}`, id: 'locate', 'aria-label': 'Show my location', title: 'My location', on: { click: () => locate() } },
-        h('span', { class: 'loc-ic', 'aria-hidden': 'true' })),
+        icon(locState === 'follow' ? 'navigate' : 'locate', 22)),
   );
   renderCompass();
 }
@@ -480,13 +490,13 @@ function renderHome() {
       status ? h('div', { class: 'loc-note' }, h('span', null, status),
         !me ? h('button', { class: 'btn small', id: 'mark-me-home', on: { click: () => startPick('me') } }, 'Mark where I am') : null) : null,
       h('div', { class: 'now-row' },
-        h('span', { class: `now-pill ${d >= 0.5 ? 'night' : 'day'}` }, d >= 0.5 ? '🌙' : '☀️', ` ${clockText(now())}`),
+        h('span', { class: `now-pill ${d >= 0.5 ? 'night' : 'day'}` }, icon(d >= 0.5 ? 'moon' : 'sun', 15), clockText(now())),
         h('span', { class: 'now-text' }, d >= 0.5 ? 'After dark: we weigh lighting, open places and busy streets more.' : 'Daytime: most busy streets are low risk.')),
       nearReports ? h('p', { class: 'live-line' }, h('span', { class: 'live-dot' }), `${nearReports} live safety report${nearReports > 1 ? 's' : ''} near you`) : null,
       h('p', { class: 'hint' }, 'Search a place, tap anywhere on the map, or pick a category above. Then tap ', h('b', null, 'Directions'), '.'),
       h('div', { class: 'quick' },
-        h('button', { class: 'btn', on: { click: () => showCategory('safe') } }, '🛡️ Safe places near me'),
-        h('button', { class: 'btn', on: { click: () => showContacts() } }, '👥 Trusted contacts')),
+        h('button', { class: 'btn', on: { click: () => showCategory('safe') } }, icon('police', 18), 'Safe places near me'),
+        h('button', { class: 'btn', on: { click: () => showContacts() } }, icon('contacts', 18), 'Trusted contacts')),
     ),
   );
 }
@@ -537,17 +547,17 @@ function renderPlace() {
     h('div', { class: 'pad place-card' },
       h('div', { class: 'pc-head' },
         h('div', null, h('h2', { id: 'place-title' }, p.label), subBits ? h('div', { class: 'meta' }, subBits) : null),
-        h('button', { class: 'icon-btn flat', 'aria-label': 'Close', on: { click: () => goHome() } }, '✕')),
+        h('button', { class: 'icon-btn flat', 'aria-label': 'Close', on: { click: () => goHome() } }, icon('close', 18))),
       h('div', { class: 'pc-facts' },
         dist != null ? h('span', null, `${fmtDist(dist)} from you`, dist > 120 ? ` · ~${fmtDuration((dist * 1.3) / (WALK_KMH / 3.6))} walk` : '') : null,
         open ? h('span', { class: `open-pill ${open.open ? 'yes' : 'no'}` }, open.open ? (open.verified ? 'Open now' : 'Likely open now') : 'Closed now') : null,
         tier ? h('span', { class: `street-now tier-text-${tier}` }, h('span', { class: `sw tier-${tier}` }), `Street right now: ${TIER_INFO[tier].label.toLowerCase()}`) : null),
       poi?.oh ? h('p', { class: 'fine' }, 'Hours: ', poi.oh) : null,
       h('div', { class: 'pc-actions' },
-        h('button', { class: 'btn primary', id: 'directions', on: { click: () => { S.to = { ...p }; S.from = null; S.userPicked = false; S.reply = null; openDirections(); } } }, '➤ Directions'),
+        h('button', { class: 'btn primary', id: 'directions', on: { click: () => { S.to = { ...p }; S.from = null; S.userPicked = false; S.reply = null; openDirections(); } } }, icon('navigate', 18), 'Directions'),
         h('button', { class: 'btn', id: 'start-here', on: { click: () => { S.from = { ...p }; S.to = null; S.reply = null; openDirections(); } } }, 'Start from here'),
-        !S.loc.fix ? h('button', { class: 'btn', id: 'im-here', on: { click: () => setManualMe(p.lonlat) } }, '📍 I am here') : null,
-        h('button', { class: 'btn ghost', on: { click: () => sharePlace(p) } }, 'Share')),
+        !S.loc.fix ? h('button', { class: 'btn', id: 'im-here', on: { click: () => setManualMe(p.lonlat) } }, icon('pin', 18), 'I am here') : null,
+        h('button', { class: 'btn ghost', on: { click: () => sharePlace(p) } }, icon('share', 18), 'Share')),
     ),
   );
 }
@@ -576,7 +586,7 @@ async function sharePlace(p: Place) {
 
 // ---------- category results ----------
 async function showCategory(key: string) {
-  const c = key === 'safe' ? { key: 'safe', label: 'Safe places', icon: '🛡️', cats: ['police', 'hospital', 'pharmacy', 'clinic', 'station', 'fuel'] as PoiCat[] } : CATS.find((x) => x.key === key)!;
+  const c = key === 'safe' ? { key: 'safe', label: 'Safe places', icon: 'police', cats: ['police', 'hospital', 'pharmacy', 'clinic', 'station', 'fuel'] as PoiCat[] } : CATS.find((x) => x.key === key)!;
   const me = myLonLat();
   const center: LonLat = me && smap.map.getBounds().contains(me) ? me : [smap.map.getCenter().lng, smap.map.getCenter().lat];
   setView('category');
@@ -589,18 +599,18 @@ async function showCategory(key: string) {
     type: 'nearby', at: center, when: now().toISOString(), radiusM: 3000, cats: c.cats, sort: key === 'safe' ? 'open' : 'dist', limit: 25 });
   if (S.view !== 'category' || S.category?.key !== key) return;
   S.category.items = r.places;
-  smap.setHits(r.places.map((p) => ({ lon: p.lon, lat: p.lat, icon: CAT_INFO[p.cat].icon, open: p.open, label: `${p.name || CAT_INFO[p.cat].label}, ${p.open ? 'open' : 'closed'}` })),
+  smap.setHits(r.places.map((p) => ({ lon: p.lon, lat: p.lat, icon: placeIcon(p.cat), open: p.open, label: `${p.name || CAT_INFO[p.cat].label}, ${p.open ? 'open' : 'closed'}` })),
     (i) => openPoi(r.places[i].id));
   if (r.places.length) smap.fit([center, ...r.places.slice(0, 10).map((p) => [p.lon, p.lat] as LonLat)], fitPad());
   clear(sheet, h('div', { class: 'grip' }),
     h('div', { class: 'list-head' }, h('h2', null, `${c.label} nearby`), h('div', { class: 'meta' }, `Within 3 km of ${me && center === me ? 'you' : 'the map centre'}, open state at ${clockText(now())}`)),
     h('ul', { class: 'places' }, r.places.length ? r.places.map((p) => h('li', null,
       h('button', { class: 'place-row', on: { click: () => openPoi(p.id) } },
-        h('span', { class: 'pi', 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon),
+        h('span', { class: `pi cat-${p.cat}` }, icon(placeIcon(p.cat), 18)),
         h('div', null, h('b', null, p.name || CAT_INFO[p.cat].label), h('small', null, `${CAT_INFO[p.cat].label} · ${fmtDist(p.distM)}`)),
         h('span', { class: `open-pill ${p.open ? 'yes' : 'no'}` }, p.open ? (p.verified ? 'Open' : 'Likely open') : 'Closed')),
       h('button', { class: 'btn small go', 'aria-label': `Directions to ${p.name || CAT_INFO[p.cat].label}`,
-        on: { click: () => { S.to = { lonlat: [p.lon, p.lat], label: p.name || CAT_INFO[p.cat].label }; S.from = null; S.userPicked = false; openDirections(); } } }, '➤'))) :
+        on: { click: () => { S.to = { lonlat: [p.lon, p.lat], label: p.name || CAT_INFO[p.cat].label }; S.from = null; S.userPicked = false; openDirections(); } } }, icon('navigate', 18)))) :
       h('li', { class: 'empty' }, 'Nothing like this is mapped within 3 km. Call 112 if you need help.')));
 }
 
@@ -614,7 +624,7 @@ function startPick(target: 'from' | 'to' | 'me') {
   else if (smap.map.getZoom() < 15) smap.map.easeTo({ zoom: 15.5 });
   const title = target === 'me' ? 'Where are you?' : target === 'from' ? 'Choose start' : 'Choose destination';
   clear(top, h('div', { class: 'pick-bar' },
-    h('button', { class: 'back', 'aria-label': 'Cancel', on: { click: () => endPick(false) } }, '‹'),
+    h('button', { class: 'back', 'aria-label': 'Cancel', on: { click: () => endPick(false) } }, icon('back', 24)),
     h('div', null, h('b', null, title), h('div', { class: 'meta' }, 'Move the map so the pin is on the spot'))));
   clear(sheet, h('div', { class: 'pad pick' },
     h('div', { class: 'pick-label', id: 'pick-label' }, '…'),
@@ -682,11 +692,11 @@ function placeField(which: 'from' | 'to'): HTMLElement {
     const near = fromLonLat() ?? [77.215, 28.6];
     const hits = search.query(q, 7, near as [number, number]);
     const items: HTMLElement[] = [];
-    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('me') } }, h('span', { class: 'ic' }, '◉'), 'Your location',
+    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('me') } }, h('span', { class: 'sic me-ic' }, icon('locate', 18)), 'Your location',
       !myLonLat() ? h('small', null, 'not found yet') : null));
     items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => choose(x) } },
-      h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
-    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'ic' }, '📍'), 'Choose on map'));
+      h('span', { class: 'sic' }, icon(placeIcon(x.type), 18)), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
+    items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'sic' }, icon('pin', 18)), 'Choose on map'));
     if (q.length >= 2 && !hits.length) items.splice(1, 0, h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market.`));
     clear(list, items);
     list.hidden = false;
@@ -706,21 +716,21 @@ function renderDirectionsTop() {
   const timeInput = h('input', { type: 'time', class: 'time-input', 'aria-label': 'Leave at', value: S.leaveAt ? isoClock(S.leaveAt) : '' });
   timeInput.addEventListener('change', () => { S.leaveAt = timeInput.value ? timeToday(timeInput.value) : null; applyTheme(); refreshPois(); openDirections(); });
   const who = h('select', { class: 'who-select', 'aria-label': 'Who is travelling', id: 'who' },
-    ([['woman', '👩 Woman'], ['child', '🧒 Child'], ['general', '🙂 Anyone']] as [Profile, string][]).map(([v, l]) => h('option', { value: v, selected: st.profile === v }, l)));
+    ([['woman', 'Woman'], ['child', 'Child'], ['general', 'Anyone']] as [Profile, string][]).map(([v, l]) => h('option', { value: v, selected: st.profile === v }, l)));
   who.addEventListener('change', () => { S.settings = save({ profile: who.value as Profile }); openDirections(); });
   clear(top,
     h('div', { class: 'dir-panel' },
       h('div', { class: 'dir-fields' },
-        h('button', { class: 'back', 'aria-label': 'Close directions', on: { click: () => { S.to ? showPlace(S.to, false) : goHome(); } } }, '‹'),
+        h('button', { class: 'back', 'aria-label': 'Close directions', on: { click: () => { S.to ? showPlace(S.to, false) : goHome(); } } }, icon('back', 24)),
         h('div', { class: 'fields' }, placeField('from'), placeField('to')),
-        h('button', { class: 'swap', 'aria-label': 'Swap start and destination', id: 'swap', on: { click: () => swapEnds() } }, '⇅')),
+        h('button', { class: 'swap', 'aria-label': 'Swap start and destination', id: 'swap', on: { click: () => swapEnds() } }, icon('swap', 20))),
       h('div', { class: 'modes', role: 'tablist', 'aria-label': 'How are you travelling' },
         MODES.map((m) => {
           const t = S.modeTimes[m];
           return h('button', { class: `mode-tab${m === st.mode ? ' on' : ''}`, role: 'tab', 'aria-selected': m === st.mode ? 'true' : 'false', 'data-mode': m,
             'aria-label': `${MODE_INFO[m].label}${t ? ', ' + fmtDuration(t) : ''}`,
             on: { click: () => { if (m === S.settings.mode) return; S.settings = save({ mode: m }); S.userPicked = false; openDirections(); } } },
-          h('span', { 'aria-hidden': 'true' }, MODE_INFO[m].emoji), h('small', null, t ? fmtDuration(t) : t === null ? '—' : ''));
+          icon(m, 20), h('small', null, t ? fmtDuration(t) : t === null ? '—' : ''));
         })),
       h('div', { class: 'dir-opts' }, who,
         h('button', { class: `chip mini${S.leaveAt ? '' : ' on'}`, on: { click: () => { S.leaveAt = null; applyTheme(); refreshPois(); openDirections(); } } }, 'Leave now'),
@@ -762,7 +772,7 @@ async function planRoutes(opts: { quiet?: boolean } = {}) {
         : [h('h3', null, 'Where are you starting from?'),
           h('p', null, S.loc.status === 'denied' ? 'Location is off, so we do not know where you are.' : S.loc.status === 'asking' || S.loc.status === 'idle' ? 'Finding your location…' : 'GPS is not available right now.'),
           h('div', { class: 'row2' },
-            h('button', { class: 'btn primary', id: 'pick-start', on: { click: () => startPick('from') } }, '📍 Choose start on map'),
+            h('button', { class: 'btn primary', id: 'pick-start', on: { click: () => startPick('from') } }, icon('pin', 18), 'Choose start on map'),
             h('button', { class: 'btn', on: { click: () => (document.getElementById('f-from') as HTMLInputElement | null)?.focus() } }, 'Search start'))]));
     return;
   }
@@ -820,7 +830,7 @@ function selectRoute(i: number, fromMap = false) {
 
 function tierBadge(r: { tier: Tier }) {
   const t = TIER_INFO[r.tier];
-  return h('span', { class: `tier tier-${r.tier}` }, h('span', { 'aria-hidden': 'true' }, tierIcon(r.tier)), t.label);
+  return h('span', { class: `tier tier-${r.tier}` }, tierSvg(r.tier, 13), t.label);
 }
 
 function renderRoutes() {
@@ -851,15 +861,15 @@ function renderRoutes() {
             h('span', { class: 'rc-sub' }, fmtDist(r.lengthM)),
             r.labels.filter((l) => l !== 'Also safest' && l !== 'Alternative').map((l) => h('span', { class: `lbl lbl-${l.toLowerCase()}` }, l)),
             h('span', { class: 'rc-badge' }, tierBadge(r))),
-          h('span', { class: `rc-prec prec-${r.tier}` }, h('span', { 'aria-hidden': 'true' }, r.tier === 'green' ? '🛡️' : '⚠️'), r.precautions.headline),
+          h('span', { class: `rc-prec prec-${r.tier}` }, icon(r.tier === 'green' ? 'police' : 'alert', 15), r.precautions.headline),
           on && r.precautions.items.length && r.tier !== 'green'
             ? h('span', { class: 'rc-items' }, r.precautions.items.slice(0, 2).map((t) => h('span', null, '• ', t))) : null)));
       })),
     R.note ? h('p', { class: 'note' }, R.note) : null,
     vehicleNote ? h('p', { class: 'note' }, 'One-way streets are not in this map yet. Follow road signs.') : null,
     sel ? h('div', { class: 'actions sticky' },
-      h('button', { class: 'btn', id: 'details-btn', on: { click: () => showDetails() } }, 'Precautions & steps'),
-      h('button', { class: 'btn primary', id: 'start', on: { click: () => startJourney() } }, '▶ Start')) : null,
+      h('button', { class: 'btn', id: 'details-btn', on: { click: () => showDetails() } }, 'Precautions'),
+      h('button', { class: 'btn primary', id: 'start', on: { click: () => startJourney() } }, icon('navigate', 18), 'Start')) : null,
   );
 }
 
@@ -885,7 +895,7 @@ function showDetails() {
   const dark = darkness(now()) >= 0.5;
   clear(sheet,
     h('div', { class: 'grip' }),
-    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back to routes', on: { click: () => { setView('directions'); renderRoutes(); } } }, '‹'),
+    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back to routes', on: { click: () => { setView('directions'); renderRoutes(); } } }, icon('back', 24)),
       h('div', { class: 'summary-text' }, h('div', { class: 'big-time' }, fmtDuration(r.timeS), ' ', tierBadge(r)),
         h('div', { class: 'meta' }, `${fmtDist(r.lengthM)} by ${MODE_INFO[S.settings.mode].label.toLowerCase()}, arrive about ${clockText(new Date(now().getTime() + r.timeS * 1000))}`))),
     h('div', { class: 'pad' },
@@ -904,20 +914,20 @@ function showDetails() {
         h('li', null, h('button', { class: 'linkish', on: { click: () => smap.map.flyTo({ center: [d.lon, d.lat], zoom: 16.5 }) } },
           h('span', { class: 'warn-ic' }, '!'), `${fmtDist(d.lengthM)}${d.street ? ' on ' + d.street : ''}: ${d.reasons.join(', ') || 'quiet at this hour'}`))))] : null,
       r.havenList.length ? [h('h3', null, 'Safe places open on the way'), h('ul', { class: 'havens' }, r.havenList.slice(0, 8).map((p) =>
-        h('li', null, h('span', { 'aria-hidden': 'true' }, CAT_INFO[p.cat].icon), h('span', null, p.name || CAT_INFO[p.cat].label),
+        h('li', null, h('span', { class: `pi cat-${p.cat}` }, icon(placeIcon(p.cat), 16)), h('span', null, p.name || CAT_INFO[p.cat].label),
           h('small', null, p.verified ? 'open now' : 'open now (estimated hours)'))))] : null,
       h('h3', null, 'Tell when I reach'),
-      h('p', { class: 'fine' }, '🔒 Your location stays on your phone. During the trip it is shared only for your live link and deleted when you arrive.'),
+      h('p', { class: 'fine lockline' }, icon('lock', 14), 'Your location stays on your phone. During the trip it is shared only for your live link and deleted when you arrive.'),
       contacts.length ? h('div', { class: 'chips' }, contacts.map((c) => h('button', {
         class: `chip${c.notify ? ' on' : ''}`, 'aria-pressed': c.notify ? 'true' : 'false',
         on: { click: () => { c.notify = !c.notify; S.settings = save({ contacts }); showDetails(); } },
-      }, c.notify ? '✓ ' : '', c.name)), h('button', { class: 'chip', on: { click: () => showContacts() } }, '+ Add')) :
+      }, c.notify ? icon('check', 15, 2.4) : null, c.name)), h('button', { class: 'chip', on: { click: () => showContacts() } }, '+ Add')) :
         h('p', null, h('button', { class: 'linkish', on: { click: () => showContacts() } }, 'Add a trusted contact'), ' to send an arrival message.'),
       h('details', { class: 'steps' }, h('summary', null, 'Turn-by-turn directions'),
         h('ol', null, r.steps.map((s) => h('li', null, s.text, s.distM ? h('small', null, ` ${fmtDist(s.distM)}`) : null)))),
       h('p', { class: 'fine' }, 'Scores describe the street environment at this hour (open places, police, busy roads, lighting, parks, live reports and traveller reviews). They help you choose; they cannot guarantee safety.'),
     ),
-    h('div', { class: 'actions sticky' }, h('button', { class: 'btn primary wide', id: 'start', on: { click: () => startJourney() } }, '▶ Start journey')),
+    h('div', { class: 'actions sticky' }, h('button', { class: 'btn primary wide', id: 'start', on: { click: () => startJourney() } }, icon('navigate', 18), 'Start journey')),
   );
 }
 
@@ -949,7 +959,7 @@ async function refreshReports(force = false) {
 
 function drawReports() {
   const list = S.settings.layers.reports ? S.reports : [];
-  smap.setReports(list.map((r) => ({ id: r.id, lon: r.lon, lat: r.lat, icon: REPORT_KINDS[r.kind]?.icon ?? '⚠', label: REPORT_KINDS[r.kind]?.label ?? r.kind, danger: REPORT_KINDS[r.kind]?.danger ?? true })),
+  smap.setReports(list.map((r) => ({ id: r.id, lon: r.lon, lat: r.lat, icon: REPORT_ICON[r.kind] ?? 'alert', label: REPORT_KINDS[r.kind]?.label ?? r.kind, danger: REPORT_KINDS[r.kind]?.danger ?? true })),
     (id) => openReportPopup(id));
 }
 
@@ -960,7 +970,7 @@ function openReportPopup(id: string) {
   if (!r) return;
   const k = REPORT_KINDS[r.kind];
   const box = h('div', { class: 'rp' },
-    h('b', null, `${k.icon} ${k.label}`),
+    h('b', { class: 'rp-title' }, icon(REPORT_ICON[r.kind] ?? 'alert', 18), k.label),
     h('div', { class: 'meta' }, `Reported ${ago(Date.now() - r.createdAt)} · ${r.confirms} confirmed${r.dismisses ? ` · ${r.dismisses} said gone` : ''}`),
     h('div', { class: 'meta' }, 'Is it still there?'),
     h('div', { class: 'row2' },
@@ -1002,7 +1012,7 @@ function openReport() {
     h('p', { class: 'fine' }, 'Your report is anonymous and expires in a few hours. Routes for everyone avoid this spot until then.'),
     h('div', { class: 'report-grid' }, (Object.keys(REPORT_KINDS) as ReportKind[]).map((k) =>
       h('button', { class: `report-kind${REPORT_KINDS[k].danger ? '' : ' good'}`, 'data-kind': k, on: { click: () => send(k) } },
-        h('span', { class: 'rk-ic', 'aria-hidden': 'true' }, REPORT_KINDS[k].icon), REPORT_KINDS[k].label))),
+        h('span', { class: 'rk-ic' }, icon(REPORT_ICON[k], 24)), REPORT_KINDS[k].label))),
     h('p', { class: 'fine' }, 'In danger right now? Use SOS or call 112.'),
     h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Cancel')));
 }
@@ -1030,12 +1040,12 @@ function openLayers() {
 function openMenu() {
   openModal(h('div', { class: 'modal-card menu' },
     h('div', { class: 'brand' }, h('span', { class: 'logo', 'aria-hidden': 'true' }), 'SafeRaah'),
-    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showCategory('safe'); } } }, '🛡️  Safe places near me'),
-    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showContacts(); } } }, '👥  Trusted contacts & settings'),
-    h('button', { class: 'menu-row', on: { click: () => { closeModal(); openLayers(); } } }, '🗺️  Map layers'),
-    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showHelp(); } } }, '❓  How to use SafeRaah'),
-    h('a', { class: 'menu-row danger', href: telLink('112') }, '📞  Call 112 (emergency)'),
-    h('a', { class: 'menu-row', href: telLink('1091') }, '📞  Women helpline 1091'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showCategory('safe'); } } }, h('span', { class: 'mi' }, icon('police', 18)), 'Safe places near me'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showContacts(); } } }, h('span', { class: 'mi' }, icon('contacts', 18)), 'Trusted contacts & settings'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); openLayers(); } } }, h('span', { class: 'mi' }, icon('layers', 18)), 'Map layers'),
+    h('button', { class: 'menu-row', on: { click: () => { closeModal(); showHelp(); } } }, h('span', { class: 'mi' }, icon('help', 18)), 'How to use SafeRaah'),
+    h('a', { class: 'menu-row danger', href: telLink('112') }, h('span', { class: 'mi' }, icon('phone', 18)), 'Call 112 (emergency)'),
+    h('a', { class: 'menu-row', href: telLink('1091') }, h('span', { class: 'mi' }, icon('phone', 18)), 'Women helpline 1091'),
     h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Close')));
 }
 
@@ -1172,7 +1182,7 @@ function renderJourney() {
   if (!voiceBtn && canSpeak()) voiceBtn = h('button', { class: 'isl-voice', id: 'voice-toggle',
     on: { click: (e: Event) => { e.stopPropagation(); S.settings = save({ voice: !S.settings.voice }); if (!S.settings.voice) stopSpeaking(); renderJourney(); } } }) as HTMLButtonElement;
   if (voiceBtn) {
-    voiceBtn.textContent = S.settings.voice ? '🔊' : '🔇';
+    voiceBtn.replaceChildren(icon(S.settings.voice ? 'voice' : 'mute', 18));
     voiceBtn.setAttribute('aria-pressed', S.settings.voice ? 'true' : 'false');
     voiceBtn.setAttribute('aria-label', S.settings.voice ? 'Mute voice guidance' : 'Turn on voice guidance');
   }
@@ -1188,7 +1198,7 @@ function renderJourney() {
   if (island.dataset.sig !== sig) {
     island.dataset.sig = sig;
     clear(island,
-      h('span', { class: `isl-arrow turn-${next.turn}`, 'aria-hidden': 'true' }, ARROW[next.turn] ?? '↑'),
+      h('span', { class: `isl-arrow turn-${next.turn}` }, icon(next.turn, 28, 2.4)),
       h('div', { class: 'isl-main' },
         next.turn !== 'arrive' ? h('b', { class: 'isl-dist in-dist' }, fmtDist(toNext)) : null,
         h('span', { class: 'isl-text' }, next.text)),
@@ -1341,7 +1351,9 @@ function showMessageSheet(title: string, text: string, onClose?: () => void) {
 function openModal(content: HTMLElement) {
   clear(modal, content);
   modal.hidden = false;
-  (content.querySelector('button, a') as HTMLElement | null)?.focus();
+  // move focus into the dialog without drawing a focus ring on a button the user did not choose
+  content.setAttribute('tabindex', '-1');
+  content.focus({ preventScroll: true });
 }
 function closeModal() { modal.hidden = true; clear(modal); if (checkTimer) { clearInterval(checkTimer); checkTimer = null; } }
 modal.addEventListener('click', (e) => { if (e.target === modal && !checkTimer) closeModal(); });
@@ -1449,12 +1461,12 @@ function renderArrived(msg: string, autoSent: number) {
   const names = S.settings.contacts.filter((c) => c.notify).map((c) => c.name);
   let rating = 0;
   const tags = new Set<string>();
-  const TAGS: [string, string][] = [['well_lit', '💡 Well lit'], ['busy', '👥 Busy'], ['shops_open', '🏪 Shops open'], ['police_seen', '👮 Police seen'],
-    ['dark', '🌑 Dark'], ['deserted', '🚷 Deserted'], ['harassment', '😟 Harassment'], ['followed', '👣 Followed'], ['stray_dogs', '🐕 Stray dogs'], ['bad_footpath', '🚧 Bad footpath']];
+  const TAGS: [string, string][] = [['well_lit', 'Well lit'], ['busy', 'Busy'], ['shops_open', 'Shops open'], ['police_seen', 'Police seen'],
+    ['dark', 'Dark'], ['deserted', 'Deserted'], ['harassment', 'Harassment'], ['followed', 'Followed'], ['stray_dogs', 'Stray dogs'], ['bad_footpath', 'Bad footpath']];
   const stars = h('div', { class: 'stars', role: 'radiogroup', 'aria-label': 'Safety rating' });
   const drawStars = () => clear(stars, [1, 2, 3, 4, 5].map((n) => h('button', {
     class: `star${n <= rating ? ' on' : ''}`, role: 'radio', 'aria-checked': n === rating ? 'true' : 'false', 'aria-label': `${n} of 5`,
-    on: { click: () => { rating = n; drawStars(); submit.disabled = false; } } }, '★')));
+    on: { click: () => { rating = n; drawStars(); submit.disabled = false; } } }, icon('star', 30, 1.6))));
   const submit = h('button', { class: 'btn primary', disabled: true, id: 'submit-review', on: { click: async () => {
     try {
       await api.review(J.handle!.id, res.reviewToken, rating, [...tags]);
@@ -1479,7 +1491,7 @@ function renderArrived(msg: string, autoSent: number) {
   clear(sheet,
     h('div', { class: 'grip' }),
     h('div', { class: 'pad center' },
-      h('div', { class: 'arrived-mark', 'aria-hidden': 'true' }, '✓'),
+      h('div', { class: 'arrived-mark' }, icon('check', 40, 2.6)),
       h('h2', null, 'You reached'),
       h('p', null, J.dest.label),
       autoSent ? h('p', { class: 'ok-msg' }, `Arrival message sent to ${names.join(', ')}.`) :
@@ -1514,7 +1526,7 @@ function showContacts() {
   const travName = h('input', { type: 'text', value: st.travellerName, placeholder: 'Your name (shown in messages)', 'aria-label': 'Your name', maxlength: 30 });
   travName.addEventListener('change', () => { S.settings = save({ travellerName: travName.value.trim() }); toast('Saved'); });
   clear(sheet,
-    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, '‹'), h('h2', null, 'Contacts and settings')),
+    h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, icon('back', 24)), h('h2', null, 'Contacts and settings')),
     h('div', { class: 'pad' },
       h('h3', null, 'Your name'), travName,
       h('h3', null, 'Trusted contacts'),
@@ -1522,7 +1534,7 @@ function showContacts() {
         h('div', null, h('b', null, c.name), h('small', null, c.phone)),
         h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: c.notify, 'aria-label': `Send arrival message to ${c.name}`,
           on: { change: (e: Event) => { c.notify = (e.target as HTMLInputElement).checked; S.settings = save({ contacts: st.contacts }); } } }), 'Arrival message'),
-        h('button', { class: 'icon-btn flat', 'aria-label': `Remove ${c.name}`, on: { click: () => { S.settings = save({ contacts: st.contacts.filter((x) => x.id !== c.id) }); S.view = prev; showContacts(); } } }, '✕')))) :
+        h('button', { class: 'icon-btn flat', 'aria-label': `Remove ${c.name}`, on: { click: () => { S.settings = save({ contacts: st.contacts.filter((x) => x.id !== c.id) }); S.view = prev; showContacts(); } } }, icon('close', 16))))) :
         h('p', { class: 'hint' }, 'Add up to 5 people who should know when you reach, and who get your SOS.'),
       h('div', { class: 'add-contact' }, name, phone, h('button', { class: 'btn primary', id: 'add-contact', on: { click: add } }, 'Add contact')), err,
       h('p', { class: 'fine' }, 'Contacts stay on this phone. Messages are sent from your own phone by SMS or WhatsApp.'),
@@ -1573,13 +1585,13 @@ function showHelp() {
   const prev = S.view === 'help' ? 'home' : S.view;
   setView('help');
   clear(top);
-  clear(sheet, h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, '‹'), h('h2', null, 'How to use SafeRaah')),
+  clear(sheet, h('div', { class: 'summary' }, h('button', { class: 'back', 'aria-label': 'Back', on: { click: () => goBack(prev) } }, icon('back', 24)), h('h2', null, 'How to use SafeRaah')),
     h('div', { class: 'pad guides' }, GUIDES.map(([k, title, text]) => h('figure', { class: 'guide' },
       h('img', { src: `${BASE}help/${k}.gif`, alt: `Animation: ${title}`, loading: 'lazy', width: 240, height: 520,
         on: { error: (e: Event) => ((e.target as HTMLElement).style.display = 'none') } }),
       h('figcaption', null, h('b', null, title), h('span', null, text)))),
     h('h3', null, 'Live on the map'),
-    h('p', null, '⚠ Report: tell others about a dark street, harassment, a drunk group or someone following people. Reports expire in a few hours and routes avoid them. 🗺️ Layers: colour every street by how safe it is right now.'),
+    h('p', null, 'Report: tell others about a dark street, harassment, a drunk group or someone following people. Reports expire in a few hours and routes avoid them. Layers: colour every street by how safe it is right now.'),
     h('h3', null, 'Helplines'), h('ul', { class: 'helplines' }, HELPLINES.map((x) => h('li', null, h('a', { href: telLink(x.n) }, x.n), ` ${x.label}`))),
     h('h3', null, 'How the colours are worked out'),
     h('p', null, 'Every street gets a score for the time you travel: are places like police stations, hospitals, medical stores and shops open nearby, is the road busy, is it usually lit, does it run through a park or empty land, what travellers reported in the last few hours, and what verified travellers said about it. Routes are coloured by their real score, so in daytime all routes can be green.'),
@@ -1587,14 +1599,34 @@ function showHelp() {
     h('p', { class: 'fine' }, `Map data © OpenStreetMap contributors (ODbL) via OpenMapTiles, snapshot ${S.snapshot || '31 Oct 2026'}. Covers all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad.`)));
 }
 
+/** The route-that-turns-safe drawing on the welcome screen (the one big motion moment). */
+function heroArt(): HTMLElement {
+  const t = document.createElement('template');
+  t.innerHTML = `<svg class="hero" viewBox="0 0 320 150" role="img" aria-label="A route turning from red to green">
+    <defs><linearGradient id="hg" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#ff3b30"/><stop offset=".45" stop-color="#ff9f0a"/><stop offset="1" stop-color="#30b158"/></linearGradient></defs>
+    <path d="M40 124 C 90 124, 92 70, 140 76 S 196 120, 226 92 S 250 52, 268 50" fill="none" stroke="currentColor" stroke-opacity=".08" stroke-width="16" stroke-linecap="round"/>
+    <path class="road" d="M40 124 C 90 124, 92 70, 140 76 S 196 120, 226 92 S 250 52, 268 50" fill="none" stroke="url(#hg)" stroke-width="7" stroke-linecap="round"/>
+    <circle class="start-dot" cx="40" cy="124" r="9" fill="#0a84ff" stroke="#fff" stroke-width="3"/>
+    <g class="end-pin"><path d="M268 50 c-9 0 -15 -7 -15 -15 c0 -10 15 -24 15 -24 s15 14 15 24 c0 8 -6 15 -15 15z" fill="#30b158" stroke="#fff" stroke-width="2.5"/>
+      <circle cx="268" cy="35" r="4.5" fill="#fff"/></g></svg>`;
+  const wrap = h('div', null);
+  wrap.appendChild(t.content.firstElementChild!);
+  return wrap;
+}
+
 function showIntro() {
+  const feat = (ic: string, title: string, text: string) =>
+    h('div', { class: 'feat' }, h('span', { class: 'mi' }, icon(ic, 20)), h('div', null, h('b', null, title), h('span', null, text)));
   openModal(h('div', { class: 'modal-card intro' },
-    h('h2', null, 'Reach home safely'),
-    h('p', null, 'SafeRaah works like a normal map: your blue dot, search, tap any place, Directions. For every trip we show the fastest route first and up to three safer ones, each coloured by how safe it is right now and with the precautions it needs.'),
-    h('p', null, 'Add one trusted contact so we can tell them when you reach.'),
-    h('div', { class: 'row2' },
-      h('button', { class: 'btn ghost', on: { click: () => { save({ seenIntro: true }); closeModal(); } } }, 'Later'),
-      h('button', { class: 'btn primary', on: { click: () => { save({ seenIntro: true }); closeModal(); showContacts(); } } }, 'Add a contact')),
+    heroArt(),
+    h('h2', null, 'Reach home safely.'),
+    h('p', { class: 'lead' }, 'A map of Delhi that shows how safe each route is right now — and lets you choose.'),
+    feat('navigate', 'Fastest first, safer options beside it', 'Every route shows its colour and the precautions it needs.'),
+    feat('voice', 'Spoken turns and a live link', 'Family can follow your trip and get a message when you reach.'),
+    feat('lock', 'Your location stays on your phone', 'Trip data is deleted the moment you arrive.'),
+    h('button', { class: 'btn primary wide', id: 'intro-contact', on: { click: () => { save({ seenIntro: true }); closeModal(); showContacts(); } } }, 'Add a trusted contact'),
+    h('button', { class: 'btn ghost wide', on: { click: () => { save({ seenIntro: true }); closeModal(); } } }, 'Not now'),
   ));
 }
 
@@ -1622,7 +1654,7 @@ async function showTrack(shareId: string) {
       h('p', null, d.status === 'arrived' ? `Arrived at ${clockText(new Date(d.arrivedAt))}.` : `Expected by ${clockText(eta)}.`),
       d.last ? h('p', { class: 'meta' }, `Last seen ${Math.max(0, Math.round((Date.now() - d.last.t) / 60000))} min ago.`) : h('p', { class: 'meta' }, 'Waiting for the first location…'),
       d.status === 'active' || d.status === 'sos' ? h('p', { class: 'fine' }, 'This page updates every 10 seconds.')
-        : h('p', { class: 'fine' }, '🔒 The trip has ended, so its location data has been deleted.')));
+        : h('p', { class: 'fine lockline' }, icon('lock', 14), 'The trip has ended, so its location data has been deleted.')));
     return d.status === 'active' || d.status === 'sos';
   };
   if (await draw()) { const t = setInterval(async () => { if (!(await draw())) clearInterval(t); }, 10000); }

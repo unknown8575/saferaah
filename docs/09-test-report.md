@@ -77,3 +77,16 @@ The app was rebuilt to behave like Google/Apple Maps: map first with a live blue
 | 32 | E2E TC-106 | A single unconfirmed report on a busy main road does not create a "risky stretch" (correct), so the test expected the wrong signal | Test checks the route's risk rises instead |
 
 New tests: 12 unit/API cases for live reports, precautions, mode times and re-routing (TC-110–114, TC-120–126) and 6 end-to-end cases (TC-103–108). Totals: 81 unit + API tests, 18 end-to-end cases.
+
+## Premium redesign (v1.4)
+
+Apple-style visual system: system font (SF on Apple devices, Inter elsewhere), frosted-glass search bar, chips, buttons and sheets; line icons instead of emoji; a segmented control for travel modes; inset grouped lists; a calm Apple-Maps-like basemap so only the safety colours stand out; a black navigation island. Motion answers actions: new routes draw themselves from start to destination with their time labels fading in after, each new screen's content rises in once, dialogs slide up like iOS sheets, toggles spring, the blue dot breathes, the arrival tick draws itself; the welcome screen draws a route turning from red to green. All motion is switched off for people who ask their phone to reduce motion.
+
+| # | Found by | Defect | Fix |
+|---|---|---|---|
+| 33 | E2E TC-91, TC-104 | Search suggestions were drawn under the category chips (glass layers stack separately) | Search bar and direction fields given their own layer above the chips |
+| 34 | E2E TC-100 | Text-style link buttons were shorter than a comfortable touch target | Minimum 36 px height |
+| 35 | screenshot review | The street-safety layer at night was loud enough to compete with routes | Thinner, lighter lines |
+| 36 | screenshot review | A focus ring appeared on the first button of every dialog | Focus moves to the dialog itself |
+
+Privacy follow-up: every street vote now has its own pseudonym and votes are deleted after a year (TC-134). Totals: 87 unit + API tests, 19 end-to-end cases.
