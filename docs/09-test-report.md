@@ -1,11 +1,11 @@
 # SafeRaah — Test Report (Phases 6, 7 and 9)
 
-Final run on the release build, 6 Nov 2026.
+Final run on the release build covering all of Delhi NCT, 6 Nov 2026.
 
 | Suite | Result |
 |---|---|
 | TypeScript typecheck | clean |
-| Unit tests (vitest, machine timezone forced to UTC) | 52 / 52 passed |
+| Unit tests (vitest, machine timezone forced to UTC) | 55 / 55 passed |
 | API tests (real server, fresh SQLite) | 14 / 14 passed |
 | End-to-end (headless Chrome, 390×844 phone, 360 px, 1280 px desktop) | 12 / 12 passed |
 
@@ -44,3 +44,19 @@ Every case in `docs/05-test-cases.md` is automated; TC-76 (CORS) and TC-102 (off
 * Real devices: actual GPS behaviour, background tracking on locked Android/iOS phones, and native builds (Android Studio/Xcode were not available in the build environment).
 * Real SMS delivery (requires DLT registration and a provider account).
 * Field validation of the risk scores against real women's experience — the most important next step.
+
+## Whole-Delhi update (v1.1)
+
+Coverage grew from central Delhi (206 km²) to all of Delhi NCT (~2,700 km² including border margins). The graph format changed to junction nodes plus edge geometry, which keeps 2 million road points in a 400k-node graph.
+
+| # | Found by | Defect | Fix |
+|---|---|---|---|
+| 18 | data review | Map tiles hold only ~2,300 buildings for all Delhi; mixing in the dense central-Delhi building data would have made central areas look safer | One uniform "activity" signal (mapped places, stops, schools, buildings) for the whole city |
+| 19 | screenshot review | A green alternative route was labelled "Alternative" while the yellow fastest route was the only ranked one | Alternatives that are clearly safer join the fastest→safest list |
+| 20 | screenshot review | Hundreds of hospital/police dots cluttered the city-wide view | Shown from zoom 13 (others from 15) |
+| 21 | screenshot review | "3 polices" | Proper singular/plural nouns |
+| 22 | search test TC-82 | "India Gate" not found: landmarks, markets, parks and colleges were missing from offline search | Indexed (search grew from 26,650 to 34,797 entries) |
+| 23 | E2E TC-96 | Demo pause landed on a low-risk stretch, where the app correctly waits 10 min (not 4) before asking | Test pause length made configurable; behaviour unchanged |
+| 24 | font regression | MapLibre requires `{fontstack}` in the glyph URL; a space-free path broke the style | Font stack renamed `noto` |
+
+Speed on the whole-Delhi graph (build machine): graph load 0.15 s; risk field 0.1–0.35 s; walking trips 50–170 ms; 25–30 km drives ≈ 1 s for all routes.

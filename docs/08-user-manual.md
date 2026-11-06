@@ -52,6 +52,6 @@ Add up to 5 trusted people. They stay on your phone. *Simulate my movement* lets
 Police stations, hospitals, medical stores, clinics, metro stations and petrol pumps within 1.5 km, with **Open / Likely open / Closed** for the chosen time, and a **Go** button for a safe route there.
 
 ## Good to know
-* Coverage today: central Delhi (Mehrauli to Old Delhi). Map data © OpenStreetMap contributors.
-* For scooty, auto and car, one-way streets are not in this map yet — follow road signs.
+* Coverage: all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad. Map data © OpenStreetMap contributors.
+* Some areas have fewer shops mapped on OpenStreetMap, so "nothing open nearby" there can partly mean "nothing mapped yet". Your reviews help fix this.
 * SafeRaah helps you choose; it cannot guarantee safety. In danger, call **112**.

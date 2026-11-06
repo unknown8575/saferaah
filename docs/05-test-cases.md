@@ -41,6 +41,9 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-29 | U normal | Explanation fields | havens, police share, danger spots with reasons | FR-6 |
 | TC-30 | U normal | Walking at 23:30 is risky everywhere | advice suggests auto with its time | FR-8 |
 | TC-31 | U normal | Turn-by-turn steps | start step, ≥1 turn, final "arrived"; distances sum ≈ route length | FR-10 |
+| TC-32 | U normal | Whole Delhi: Narela→Najafgarh (scooty), Dwarka→Laxmi Nagar (auto), Mangolpuri→Sultanpuri (walk) | routes found in < 4 s, length between crow-flight and 2.2× | FR-3 |
+| TC-33 | U edge | Real one-way streets on four trips by car/auto/scooty | every one-way segment travelled in its direction (> 20 checked) | FR-2 |
+| TC-34 | U normal | Route geometry follows the real road shape | more points than segments; drawn length within 2% of route length | FR-3 |
 
 ## Journey monitor
 | ID | Type | Case | Expect | Req |

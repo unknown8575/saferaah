@@ -5,12 +5,13 @@ export interface Hit { name: string; lon: number; lat: number; type: string; sco
 const norm = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
 
 const TYPE_BOOST: Record<string, number> = {
-  station: 0.6, suburb: 0.55, neighbourhood: 0.5, quarter: 0.45, police: 0.4, hospital: 0.4, attraction: 0.3,
+  station: 0.6, suburb: 0.55, landmark: 0.55, neighbourhood: 0.5, market: 0.45, quarter: 0.45, police: 0.4, hospital: 0.4, attraction: 0.3, park: 0.3, school: 0.25,
   locality: 0.35, hotel: 0.1, street: 0.05,
 };
 export const TYPE_ICON: Record<string, string> = {
   station: '🚇', police: '👮', hospital: '🏥', clinic: '🩺', pharmacy: '💊', street: '🛣️', shop: '🛍️', food: '🍽️',
   hotel: '🏨', fuel: '⛽', bank: '🏦', atm: '🏧', worship: '🛕', govt: '🏛️', liquor: '🍺',
+  landmark: '🏛️', park: '🌳', market: '🛍️', school: '🏫', office: '🏢', suburb: '📍', neighbourhood: '📍',
 };
 
 export class PlaceSearch {

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "SafeRaah: safety-aware routing for women and children in Delhi",
   "scripts": {
-    "data": "tsx pipeline/build-data.ts data/raw/central-delhi.geojson web/public/data && tsx pipeline/build-tiles.ts data/raw/central-delhi.geojson web/public/data",
+    "data": "bash pipeline/fetch_delhi.sh",
     "dev": "vite",
     "build": "vite build",
     "start": "tsx server/main.ts",

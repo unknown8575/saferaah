@@ -26,8 +26,11 @@ describe('offline search (FR-1)', () => {
     const hits = s.query('lajpat', 8);
     expect(hits.length).toBeGreaterThanOrEqual(4);
     expect(hits[0].type).toBe('station');
-    expect(hits.some((h) => h.type === 'police')).toBe(true);
-    expect(s.query('india gate')[0].name.toLowerCase()).toContain('india gate');
+    expect(hits.some((h) => h.type === 'suburb' || h.type === 'neighbourhood')).toBe(true);
+    expect(s.query('india gate')[0]).toMatchObject({ name: 'India Gate', type: 'landmark' });
+    expect(s.query('rajiv chowk').some((h) => h.type === 'police')).toBe(true);
+    // outer districts are searchable too
+    for (const q of ['narela', 'najafgarh', 'mangolpuri', 'sangam vihar', 'shahdara']) expect(s.query(q).length).toBeGreaterThan(0);
   });
   it('TC-83 short, gibberish and messy queries', () => {
     expect(s.query('l')).toEqual([]);
@@ -58,8 +61,10 @@ describe('graph file (TC-85)', () => {
     expect(g.a.poiOff.length).toBe(g.m + 1);
     expect(g.adjOff[g.n]).toBe(g.m * 2);
     for (let e = 0; e < g.m; e += 997) {
-      expect(g.lon(g.a.edgeU[e])).toBeGreaterThan(77);
-      expect(g.lat(g.a.edgeU[e])).toBeLessThan(29);
+      expect(g.lon(g.a.edgeU[e])).toBeGreaterThan(76.8);
+      expect(g.lon(g.a.edgeU[e])).toBeLessThan(77.4);
+      expect(g.lat(g.a.edgeU[e])).toBeGreaterThan(28.39);
+      expect(g.lat(g.a.edgeU[e])).toBeLessThan(28.9);
     }
   });
   it('rejects a corrupt file', () => {

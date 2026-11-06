@@ -20,7 +20,7 @@ RIPPLE = """(([x, y]) => { const d = document.createElement('div');
   background:rgba(108,99,255,.45);border:3px solid #fff;z-index:99999;pointer-events:none;transition:all .45s ease-out`;
   document.body.appendChild(d); requestAnimationFrame(() => { d.style.transform='scale(1.6)'; d.style.opacity='0'; });
   setTimeout(() => d.remove(), 600); })"""
-LAJ, GIRI = '77.24024,28.5682', '77.26285,28.54035'
+LAJ, GIRI = '77.24318,28.57009', '77.22429,28.54259'  # Lajpat Nagar II -> Soami Nagar
 
 
 class Rec:
@@ -72,13 +72,13 @@ class Rec:
         self.page.wait_for_function("() => { const m = window.__sr && window.__sr.map; return !m || (m.loaded() && m.areTilesLoaded()); }", timeout=30000)
         self.page.wait_for_timeout(9000 + ms)
 
-    def save(self, fps=6):
+    def save(self, fps=6, colors=64):
         os.makedirs(OUT, exist_ok=True)
         gif = os.path.join(OUT, f'{self.name}.gif')
         pal = os.path.join(self.dir, 'pal.png')
         scale = 'scale=240:-1:flags=lanczos'
         subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(fps), '-i', os.path.join(self.dir, '%04d.png'),
-                        '-vf', f'{scale},palettegen=max_colors=48:stats_mode=diff', pal], check=True)
+                        '-vf', f'{scale},palettegen=max_colors={colors}:stats_mode=diff', pal], check=True)
         subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(fps), '-i', os.path.join(self.dir, '%04d.png'), '-i', pal,
                         '-lavfi', f'{scale}[x];[x][1:v]paletteuse=dither=none:diff_mode=rectangle', '-loop', '0', gif], check=True)
         shutil.rmtree(self.dir)
@@ -102,12 +102,12 @@ def g_plan(b, base):
     r.tap(page.locator('.field-to .suggest li', has_text='India Gate').first, hold=2)
     page.wait_for_selector('.route-card', timeout=20000)
     r.settle(); r.frame(hold=10)
-    r.save(); ctx.close()
+    r.save(colors=128); ctx.close()
 
 
 def g_routes(b, base):
     ctx, page = new_page(b)
-    page.goto(base + f'/?demo=1&from={LAJ}&fromName=Lajpat%20Nagar%20Police%20Station&to={GIRI}&toName=Giri%20Nagar&t=21:30')
+    page.goto(base + f'/?demo=1&from={LAJ}&fromName=Lajpat%20Nagar%20II&to={GIRI}&toName=Soami%20Nagar&t=21:30')
     page.wait_for_selector('.route-card', timeout=20000)
     r = Rec(page, 'routes'); r.settle(); r.frame(hold=8)
     cards = page.locator('.route-card')
@@ -116,12 +116,12 @@ def g_routes(b, base):
     r.tap(page.locator('.route-card.sel'), hold=2)
     r.settle(600); r.frame(hold=6)
     page.locator('#sheet').evaluate('e => e.scrollTo({top: 260, behavior: "instant"})'); r.frame(hold=8)
-    r.save(); ctx.close()
+    r.save(colors=128); ctx.close()
 
 
 def g_journey(b, base):
     ctx, page = new_page(b)
-    page.goto(base + f'/?demo=1&from={LAJ}&fromName=Lajpat%20Nagar%20Police%20Station&to={GIRI}&toName=Giri%20Nagar&t=21:30&speed=25')
+    page.goto(base + f'/?demo=1&from={LAJ}&fromName=Lajpat%20Nagar%20II&to={GIRI}&toName=Soami%20Nagar&t=21:30&speed=25')
     page.wait_for_selector('.route-card', timeout=20000)
     page.locator('.route-card.sel').click(); page.wait_for_selector('.facts')
     r = Rec(page, 'journey'); r.settle(); r.frame(hold=4)
@@ -136,7 +136,7 @@ def g_journey(b, base):
 
 def g_checkin(b, base):
     ctx, page = new_page(b)
-    page.goto(base + f'/?demo=1&from={LAJ}&to={GIRI}&toName=Giri%20Nagar&t=21:30&pause=0.08&speed=60')
+    page.goto(base + f'/?demo=1&from={LAJ}&to={GIRI}&toName=Soami%20Nagar&t=21:30&pause=0.08&pauseS=720&speed=60')
     page.wait_for_selector('.route-card', timeout=20000)
     page.locator('#start').click()
     page.wait_for_timeout(1500)
@@ -150,7 +150,7 @@ def g_checkin(b, base):
 
 def g_sos(b, base):
     ctx, page = new_page(b)
-    page.goto(base + f'/?demo=1&from={LAJ}&to={GIRI}&toName=Giri%20Nagar&t=21:30&speed=20')
+    page.goto(base + f'/?demo=1&from={LAJ}&to={GIRI}&toName=Soami%20Nagar&t=21:30&speed=20')
     page.wait_for_selector('.route-card', timeout=20000)
     page.locator('#start').click(); page.wait_for_timeout(2500)
     r = Rec(page, 'sos'); r.settle(500); r.frame(hold=4)

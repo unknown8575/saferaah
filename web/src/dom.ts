@@ -31,7 +31,7 @@ export function clear(el: Element, ...kids: Child[]) {
 export function fmtDuration(s: number): string {
   const m = Math.max(1, Math.round(s / 60));
   if (m < 60) return `${m} min`;
-  return `${Math.floor(m / 60)} h ${m % 60} min`;
+  return m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`;
 }
 
 export function fmtDist(m: number): string {

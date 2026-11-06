@@ -7,3 +7,5 @@ android/.gradle/
 ios/App/build/
 ios/DerivedData/
 .DS_Store
+data/pack/
+data/raw/*.geojson

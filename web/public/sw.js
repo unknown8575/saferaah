@@ -1,8 +1,8 @@
 // Offline support: the app shell and map data are cached after first load,
 // so planning a safe route works with no signal. API calls always go to the network.
-const CACHE = 'saferaah-v1';
+const CACHE = 'saferaah-v1'; // map area packs are cached as you view them
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg',
-  'data/graph.bin', 'data/pois.json', 'data/search.json', 'data/basemap.bin', 'data/version.json',
+  'data/graph.bin', 'data/pois.json', 'data/search.json', 'data/version.json', 'data/tiles/index.json', 'data/tiles/low.bin',
   'fonts/noto/0-255.pbf', 'fonts/noto/256-511.pbf'];
 
 self.addEventListener('install', (e) => {

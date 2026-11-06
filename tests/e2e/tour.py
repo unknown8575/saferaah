@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 base, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 logs = []
-TRIP = 'from=77.24024,28.5682&fromName=Lajpat%20Nagar%20Police%20Station&to=77.26285,28.54035&toName=Giri%20Nagar'
+TRIP = 'from=77.24318,28.57009&fromName=Lajpat%20Nagar%20II&to=77.22429,28.54259&toName=Soami%20Nagar'
 GL = ['--no-sandbox', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader']
 
 

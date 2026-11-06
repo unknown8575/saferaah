@@ -39,6 +39,7 @@ interface Place { lonlat: LonLat; label: string; mine?: boolean }
 const S = {
   settings: load(),
   version: 'dev',
+  snapshot: '',
   bbox: [77.17, 28.515, 77.285, 28.68] as [number, number, number, number],
   onewayKnown: true,
   from: null as Place | null,
@@ -103,13 +104,14 @@ async function boot() {
       fetch(BASE + 'data/search.json').then((r) => r.json() as Promise<Entry[]>),
     ]);
     S.version = ver.version;
+    S.snapshot = ver.snapshot ?? '';
     search = new PlaceSearch(searchEntries);
     smap = new SafeMap(mapEl, BASE, basemap.bounds);
     (window as any).__sr.map = smap.map;
     smap.map.on('error', (e: any) => console.warn('map error', e?.error?.message ?? e));
     smap.onRouteClick((i) => selectRoute(i));
     setupMapPicking();
-    const ready = await rpc<{ meta: any }>({ type: 'init', base: new URL(BASE, location.href).href });
+    const ready = await rpc<{ meta: any }>({ type: 'init', base: new URL(BASE, location.href).href, graphParts: ver.graphParts });
     S.bbox = ready.meta.bbox; S.onewayKnown = ready.meta.onewayKnown;
     S.pois = await fetch(BASE + 'data/pois.json').then((r) => r.json());
     refreshPois();
@@ -179,7 +181,7 @@ let picking: 'from' | 'to' | null = null;
 function setupMapPicking() {
   const pickAt = (lngLat: { lng: number; lat: number }, which: 'from' | 'to') => {
     const p: LonLat = [+lngLat.lng.toFixed(6), +lngLat.lat.toFixed(6)];
-    if (!inCoverage(p)) { toast('That point is outside the area this map covers (central Delhi).'); return; }
+    if (!inCoverage(p)) { toast('That point is outside the area this map covers (Delhi NCT).'); return; }
     const label = nearestLabel(p);
     if (which === 'from') S.from = { lonlat: p, label }; else S.to = { lonlat: p, label };
     picking = null;
@@ -227,7 +229,7 @@ async function useMyLocation(): Promise<boolean> {
     navigator.geolocation.getCurrentPosition((pos) => {
       const p: LonLat = [pos.coords.longitude, pos.coords.latitude];
       S.myPos = { lon: p[0], lat: p[1], acc: pos.coords.accuracy, t: Date.now() };
-      if (!inCoverage(p)) { toast('You are outside the area this map covers (central Delhi). Search for a start point.', 5000); resolve(false); return; }
+      if (!inCoverage(p)) { toast('You are outside the area this map covers (Delhi NCT). Search for a start point.', 5000); resolve(false); return; }
       S.from = { lonlat: p, label: 'My location', mine: true };
       smap.setMe(p);
       resolve(true);
@@ -267,7 +269,7 @@ function placeField(which: 'from' | 'to'): HTMLElement {
     items.push(...hits.map((x) => h('li', { role: 'option', tabindex: 0, on: { click: () => choose(x) } },
       h('span', { class: 'ic' }, TYPE_ICON[x.type] ?? '📌'), h('span', null, x.name), h('small', null, typeLabel(x.type)))));
     items.push(h('li', { role: 'option', tabindex: 0, on: { click: () => choose('map') } }, h('span', { class: 'ic' }, '👆'), 'Choose on the map'));
-    if (q.length >= 2 && !hits.length) items.splice(which === 'from' ? 1 : 0, 0, h('li', { class: 'empty' }, `No place called “${q}” in central Delhi. Try a nearby metro station or market.`));
+    if (q.length >= 2 && !hits.length) items.splice(which === 'from' ? 1 : 0, 0, h('li', { class: 'empty' }, `No place called “${q}” in Delhi. Try a nearby metro station or market.`));
     clear(list, items);
     list.hidden = false;
   };
@@ -284,6 +286,8 @@ function placeField(which: 'from' | 'to'): HTMLElement {
 function typeLabel(t: string): string {
   if (t === 'street') return 'Street';
   if (t === 'station') return 'Metro / rail';
+  const extra: Record<string, string> = { landmark: 'Landmark', park: 'Park', market: 'Market', school: 'School / college', office: 'Office' };
+  if (extra[t]) return extra[t];
   return (CAT_INFO as Record<string, { label: string }>)[t]?.label ?? (t === 'place' ? 'Place' : t.charAt(0).toUpperCase() + t.slice(1));
 }
 
@@ -339,7 +343,7 @@ function maybeAutoPlan() { /* plan screen waits for the button; routes screen re
 // ---------- routes ----------
 async function planRoutes() {
   if (!S.from || !S.to) { showPlan(); return; }
-  if (!inCoverage(S.from.lonlat) || !inCoverage(S.to.lonlat)) { toast('Both points must be inside central Delhi for now.'); showPlan(); return; }
+  if (!inCoverage(S.from.lonlat) || !inCoverage(S.to.lonlat)) { toast('Both points must be inside Delhi NCT for now.'); showPlan(); return; }
   S.view = 'routes';
   sheet.className = 'routes';
   clear(sheet, h('div', { class: 'grip' }), summaryBar(), h('div', { class: 'loading small' }, h('div', { class: 'spinner' }), h('p', null, 'Checking which streets are busy and open right now…')));
@@ -424,7 +428,11 @@ function renderRoutes() {
 function havenLine(r: WorkerRoute): string {
   const parts: string[] = [];
   const order: PoiCat[] = ['police', 'hospital', 'pharmacy', 'station', 'fuel', 'shop', 'food'];
-  for (const c of order) if (r.havens[c]) parts.push(`${r.havens[c]} ${CAT_INFO[c].label.toLowerCase()}${r.havens[c]! > 1 && !CAT_INFO[c].label.endsWith('s') ? 's' : ''}`);
+  const NOUN: Partial<Record<PoiCat, [string, string]>> = {
+    police: ['police post', 'police posts'], hospital: ['hospital', 'hospitals'], pharmacy: ['medical store', 'medical stores'],
+    station: ['metro/rail station', 'metro/rail stations'], fuel: ['petrol pump', 'petrol pumps'], shop: ['shop', 'shops'], food: ['eatery', 'eateries'],
+  };
+  for (const c of order) { const n = r.havens[c]; if (n) parts.push(`${n} ${NOUN[c]![n > 1 ? 1 : 0]}`); }
   return parts.length ? `Open on the way: ${parts.slice(0, 3).join(', ')}` : 'Few places open on the way';
 }
 
@@ -487,7 +495,7 @@ async function startJourney() {
     } catch (err) { toast('Live sharing is unavailable: ' + (err as Error).message); }
   }
   const speedMps = S.settings.mode === 'walk' ? WALK_KMH / 3.6 : route.lengthM / route.timeS;
-  const pauseAt = params.get('pause') ? { atFrac: Number(params.get('pause')), seconds: 300 } : undefined;
+  const pauseAt = params.get('pause') ? { atFrac: Number(params.get('pause')), seconds: Number(params.get('pauseS') ?? 300) } : undefined;
   const source = sim ? simulatedSource(route.coords, speedMps, Number(params.get('speed') ?? 30), pauseAt) : gpsSource();
   let lastT = startedAt;
   const J = {
@@ -847,7 +855,8 @@ function showHelp() {
     h('h3', null, 'Helplines'), h('ul', { class: 'helplines' }, HELPLINES.map((x) => h('li', null, h('a', { href: telLink(x.n) }, x.n), ` ${x.label}`))),
     h('h3', null, 'How the colours are worked out'),
     h('p', null, 'Every street gets a score for the time you travel: are places like police stations, hospitals, medical stores and shops open nearby, is the road busy, is it usually lit, does it run through a park or empty land, and what verified travellers said about it. Routes are coloured by their real score, so in daytime all routes can be green.'),
-    h('p', { class: 'fine' }, 'Map data © OpenStreetMap contributors (ODbL), snapshot 15 Oct 2026. Covers central Delhi, Mehrauli to Old Delhi.')));
+    h('p', { class: 'fine' }, 'Some areas of Delhi have fewer shops and places mapped on OpenStreetMap, so "nothing open nearby" there can partly mean "nothing mapped yet". Your reviews help correct this.'),
+    h('p', { class: 'fine' }, `Map data © OpenStreetMap contributors (ODbL) via OpenMapTiles, snapshot ${S.snapshot || '31 Oct 2026'}. Covers all of Delhi NCT, including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad.`)));
 }
 
 function showIntro() {

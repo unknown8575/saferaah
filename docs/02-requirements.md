@@ -64,7 +64,7 @@ Turn-by-turn voice; public transport routing; real-time traffic; crime data (not
 
 ## 5. Development steps
 1. **Data pipeline** — OSM GeoJSON → `graph.bin` (nodes, segments, static safety features), `pois.json`, `search.json`, `version.json`. ✅
-2. **Basemap** — cut our own vector tiles into one `basemap.bin`; MapLibre custom protocol.
+2. **Basemap** — OpenMapTiles vector tiles for Delhi NCT, split into 17 area packs that load on demand; MapLibre custom protocol. ✅
 3. **Core logic (shared/)** — geometry, time (IST), opening hours, risk model, A* router + tiering, advice, journey monitor. ✅ (first pass)
 4. **Server** — journeys, fixes, finish/verify, reviews, crowd stats, live share, SOS, static hosting. ✅ (first pass)
 5. **Web app** — map, search, plan sheet, route list, details, journey screen, check-in, SOS, arrival + review, contacts, safe places, live trip viewer, help.

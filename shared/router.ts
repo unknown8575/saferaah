@@ -46,6 +46,8 @@ export interface RouteResult {
   alpha: number;
   edges: number[];
   coords: LonLat[];
+  /** edge travelled between coords[i] and coords[i+1] */
+  segEdge: number[];
   timeS: number;
   lengthM: number;
   meanRisk: number;
@@ -244,24 +246,43 @@ export class Router {
     return { edges, cost: gScore[VT] };
   }
 
-  /** Turn an edge chain (first/last edges partial) into coordinates. */
-  coordsOf(edges: number[], s: Snapped, t: Snapped, direct?: boolean): LonLat[] {
+  /**
+   * Turn an edge chain (first/last edges partial) into coordinates along the real
+   * road geometry. segEdge[i] is the edge travelled between coords[i] and coords[i+1].
+   */
+  geometryOf(edges: number[], s: Snapped, t: Snapped, direct?: boolean): { coords: LonLat[]; segEdge: number[] } {
     const g = this.g;
-    if (direct) return [[s.lon, s.lat], [t.lon, t.lat]];
-    const pts: LonLat[] = [[s.lon, s.lat]];
-    // find the node sequence by walking shared endpoints
-    let cur: number;
-    if (edges.length === 1) return [[s.lon, s.lat], [t.lon, t.lat]];
-    const e0 = edges[0], e1 = edges[1];
-    const u0 = g.a.edgeU[e0], v0 = g.a.edgeV[e0];
-    cur = u0 === g.a.edgeU[e1] || u0 === g.a.edgeV[e1] ? u0 : v0;
-    pts.push([g.lon(cur), g.lat(cur)]);
-    for (let i = 1; i < edges.length - 1; i++) {
-      cur = g.other(edges[i], cur);
-      pts.push([g.lon(cur), g.lat(cur)]);
+    const coords: LonLat[] = [];
+    const segEdge: number[] = [];
+    const append = (pts: LonLat[], e: number) => {
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const last = coords[coords.length - 1];
+        if (last && Math.abs(last[0] - p[0]) < 1e-9 && Math.abs(last[1] - p[1]) < 1e-9) continue;
+        if (coords.length) segEdge.push(e);
+        coords.push(p);
+      }
+    };
+    if (direct || edges.length < 2) {
+      append(g.cut(edges[0], s.t, t.t), edges[0]);
+      if (coords.length < 2) { coords.push([t.lon, t.lat]); segEdge.push(edges[0]); }
+      return { coords, segEdge };
     }
-    pts.push([t.lon, t.lat]);
-    return pts;
+    const e0 = edges[0], e1 = edges[1];
+    const u0 = g.a.edgeU[e0];
+    let cur = u0 === g.a.edgeU[e1] || u0 === g.a.edgeV[e1] ? u0 : g.a.edgeV[e0];
+    append(g.cut(e0, s.t, cur === u0 ? 0 : 1), e0);
+    for (let i = 1; i < edges.length - 1; i++) {
+      const e = edges[i];
+      const fwd = g.a.edgeU[e] === cur;
+      const pts = g.polyline(e);
+      append(fwd ? pts : pts.reverse(), e);
+      cur = g.other(e, cur);
+    }
+    const te = edges[edges.length - 1];
+    append(g.cut(te, g.a.edgeU[te] === cur ? 0 : 1, t.t), te);
+    if (coords.length < 2) { coords.push([t.lon, t.lat]); segEdge.push(te); }
+    return { coords, segEdge };
   }
 
   /** Main entry point: the up-to-four tiered routes. */
@@ -303,61 +324,67 @@ export class Router {
       return { ...base, error: 'No route found for this travel mode between these points.', computeMs: performance.now() - t0 };
     }
 
-    const all = accepted.map((a) => this.describe(a.alpha, a.edges, s, t, times, risk!, req, a.direct));
-    all.sort((a, b) => a.timeS - b.timeS || b.meanRisk - a.meanRisk);
     // Keep a slower route only if it is clearly safer than every faster route we kept,
     // and not absurdly long. This yields a Pareto front: time ↑ ⇒ risk ↓.
-    const routes: RouteResult[] = [];
-    for (const r of all) {
-      if (!routes.length) { routes.push(r); continue; }
-      // nearly the same path and time, but safer: show only the safer one
-      const twin = routes.findIndex((k) => this.overlap(k.edges, r.edges) > 0.75 && r.timeS <= k.timeS * 1.05);
-      if (twin >= 0) {
-        if (r.meanRisk < routes[twin].meanRisk) routes[twin] = r;
-        continue;
+    const front = (cands: RouteResult[]): RouteResult[] => {
+      const sorted = [...cands].sort((a, b) => a.timeS - b.timeS || b.meanRisk - a.meanRisk);
+      const out: RouteResult[] = [];
+      for (const r of sorted) {
+        if (!out.length) { out.push(r); continue; }
+        // nearly the same path and time, but safer: show only the safer one
+        const twin = out.findIndex((k) => this.overlap(k.edges, r.edges) > 0.75 && r.timeS <= k.timeS * 1.05);
+        if (twin >= 0) {
+          if (r.meanRisk < out[twin].meanRisk) out[twin] = r;
+          continue;
+        }
+        const fastestT = out[0].timeS;
+        const clearlySafer = out.every((k) =>
+          r.meanRisk <= k.meanRisk - MIN_RISK_GAIN || r.worstStretch <= k.worstStretch - 0.08);
+        const notWorse = out.every((k) => r.meanRisk < k.meanRisk);
+        if (clearlySafer && notWorse && r.timeS <= Math.max(fastestT * MAX_DETOUR, fastestT + 240)) out.push(r);
       }
-      const fastestT = routes[0].timeS;
-      const clearlySafer = routes.every((k) =>
-        r.meanRisk <= k.meanRisk - MIN_RISK_GAIN || r.worstStretch <= k.worstStretch - 0.08);
-      const notWorse = routes.every((k) => r.meanRisk < k.meanRisk);
-      if (clearlySafer && notWorse && r.timeS <= Math.max(fastestT * MAX_DETOUR, fastestT + 240)) routes.push(r);
-    }
-    const fastest = routes[0];
-    const safest = routes.reduce((a, b) => (b.meanRisk < a.meanRisk ? b : a));
-    fastest.labels.push('Fastest');
-    if (safest !== fastest) safest.labels.push('Safest');
-    else fastest.labels.push('Also safest');
-    const ranked = routes.length;
+      return out;
+    };
+    const swept = front(accepted.map((a) => this.describe(a.alpha, a.edges, s, t, times, risk!, req, a.direct)));
+    const fastestT = swept[0].timeS;
 
-    // Fill up to four with genuinely different alternatives (penalty method),
-    // each still coloured by its own true risk.
+    // Look for genuinely different alternatives (penalty method, ≤70% shared road).
+    const alts: RouteResult[] = [];
     const altPenalty = new Float32Array(g.m).fill(1);
-    for (const r of routes) for (const e of r.edges) altPenalty[e] = 2.5;
-    for (let attempt = 0; attempt < 5 && routes.length < 4; attempt++) {
+    for (const r of swept) for (const e of r.edges) altPenalty[e] = 2.5;
+    for (let attempt = 0; attempt < 5 && swept.length + alts.length < 4; attempt++) {
       const cost = new Float32Array(g.m);
       for (let e = 0; e < g.m; e++) cost[e] = times[e] * (1 + 1.5 * exposure * risk.risk[e]) * altPenalty[e];
       const r = this.astar(cost, req.mode, s, t, usable);
       if (!r) break;
       for (const e of r.edges) altPenalty[e] *= 2;
-      if (routes.some((k) => this.overlap(k.edges, r.edges) > 0.7)) continue;
+      if ([...swept, ...alts].some((k) => this.overlap(k.edges, r.edges) > 0.7)) continue;
       const d = this.describe(1.5, r.edges, s, t, times, risk, req, r.direct);
-      if (d.timeS > Math.max(fastest.timeS * MAX_DETOUR, fastest.timeS + 240)) continue;
-      d.labels.push('Alternative');
-      routes.push(d);
+      if (d.timeS > Math.max(fastestT * MAX_DETOUR, fastestT + 240)) continue;
+      alts.push(d);
     }
-    // alternatives listed after the ranked front, fastest first
-    const alts = routes.splice(ranked).sort((a, b) => a.timeS - b.timeS);
-    routes.push(...alts);
+    // An alternative that turns out clearly safer joins the fastest→safest front.
+    const ranked = front([...swept, ...alts]);
+    const others = [...swept, ...alts].filter((r) => !ranked.includes(r) &&
+      !ranked.some((k) => this.overlap(k.edges, r.edges) > 0.75 && Math.abs(r.timeS - k.timeS) <= k.timeS * 0.05))
+      .sort((a, b) => a.timeS - b.timeS)
+      .slice(0, Math.max(0, 4 - ranked.length));
+    for (const r of [...ranked, ...others]) r.labels = [];
+    const fastest = ranked[0];
+    const safest = ranked.reduce((a, b) => (b.meanRisk < a.meanRisk ? b : a));
+    fastest.labels.push('Fastest');
+    if (safest !== fastest) safest.labels.push('Safest');
+    else fastest.labels.push('Also safest');
+    for (const r of others) r.labels.push('Alternative');
+    const routes = [...ranked, ...others];
     let note: string | undefined;
-    if (ranked === 1 && safest === fastest) {
-      note = 'The fastest route is already the safest one here.';
-    }
+    if (ranked.length === 1) note = 'The fastest route is already the safest one here.';
     if (routes.length < 4) {
       note = (note ? note + ' ' : '') + (routes.length === 1
         ? 'No other sensible route exists between these points.'
         : `Only ${routes.length} meaningfully different routes exist here.`);
     }
-    return { ...base, routes, rankedCount: ranked, note, computeMs: performance.now() - t0 };
+    return { ...base, routes, rankedCount: ranked.length, note, computeMs: performance.now() - t0 };
   }
 
   private overlap(a: number[], b: number[]): number {
@@ -435,9 +462,9 @@ export class Router {
         const e = perEdge[midIdx].e;
         const reasons = new Set<string>();
         for (let k = runStart; k <= endIdx; k++) for (const r of reasonsOf(perEdge[k].e)) reasons.add(r);
+        const [dlon, dlat] = g.pointAt(e, 0.5);
         dangerSpots.push({
-          lon: (g.lon(g.a.edgeU[e]) + g.lon(g.a.edgeV[e])) / 2,
-          lat: (g.lat(g.a.edgeU[e]) + g.lat(g.a.edgeV[e])) / 2,
+          lon: dlon, lat: dlat,
           lengthM: Math.round(runLen), reasons: [...reasons].slice(0, 3),
         });
       }
@@ -458,8 +485,9 @@ export class Router {
     if (L > 0 && police / L < 0.2) warnings.push('Little police presence nearby');
     const havenTotal = havenSet.size;
     if (dark > 0.5 && L > 300 && havenTotal < L / 400) warnings.push('Few places open along the way');
+    const geo = this.geometryOf(edges, s, t, direct);
     return {
-      alpha, edges, coords: this.coordsOf(edges, s, t, direct), timeS: T, lengthM: L, meanRisk,
+      alpha, edges, coords: geo.coords, segEdge: geo.segEdge, timeS: T, lengthM: L, meanRisk,
       worstStretch: worst, tier: tierOf(meanRisk, worst), havens, havenIds: [...havenSet],
       mainRoadShare: L ? main / L : 0, litShare: L ? lit / L : 0, policeShare: L ? police / L : 0,
       dangerSpots, warnings, labels: [],

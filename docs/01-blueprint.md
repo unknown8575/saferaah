@@ -19,10 +19,10 @@ flowchart LR
   subgraph Offline data build
     OSM[OpenStreetMap extract<br/>roads, places, parks] --> P[pipeline/build-data.ts]
     OSM --> T[pipeline/build-tiles.ts]
-    P --> G[graph.bin<br/>126k junctions, 144k segments<br/>+ static safety features]
-    P --> POI[pois.json<br/>6.9k places + opening hours]
+    P --> G[graph.bin<br/>400k junctions, 533k segments<br/>+ geometry + safety features]
+    P --> POI[pois.json<br/>18k places + opening hours]
     P --> S[search.json]
-    T --> BM[basemap.bin<br/>our own vector tiles]
+    T --> BM[17 basemap area packs<br/>loaded on demand]
   end
   subgraph Phone / browser  (PWA, wrapped by Capacitor for Android & iOS)
     UI[App UI<br/>MapLibre GL] <--> W[Router web worker]
@@ -89,9 +89,11 @@ Plus: Contacts & settings, Safe places nearby, Live trip viewer (for contacts).
 
 ## 7. Data and coverage (this build)
 
-* OpenStreetMap snapshot **2026-10-15**, central Delhi (Mehrauli → Old Delhi, ~206 km²), © OpenStreetMap contributors, ODbL.
-* The pipeline accepts any OSM-derived GeoJSON; extending to all of Delhi NCT or other cities is a data download, not a code change.
-* The available extract has no `oneway` tags, so vehicle routes may use a one-way street in the wrong direction; the app warns about this for vehicle modes until a full extract is loaded.
+* **All of Delhi NCT** — all 11 districts including New Delhi, with the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad (bbox 76.83–77.35 E, 28.40–28.89 N).
+* OpenStreetMap as of **31 Oct 2026** (Geofabrik Northern Zone, via a monthly-built map pack), © OpenStreetMap contributors, ODbL.
+* Roads with one-way streets and names; footpaths, parks/forest, industrial land and cemeteries from OpenMapTiles vector tiles; 18,207 places (227 police posts, 863 hospitals, 994 clinics/doctors, 480 medical stores, 301 metro/rail stations, 474 petrol pumps, 7,598 shops, 3,186 eateries, 214 liquor outlets…), 1,732 with mapped opening hours.
+* Building data in the tiles is sparse, so "activity" uses all mapped places, stops, schools and buildings within 50 m — the same signal everywhere, so no area is favoured by richer data from another source.
+* Earlier builds covered only central Delhi (Mehrauli → Old Delhi, snapshot 15 Oct 2026, no one-way tags).
 
 ## 8. Known limits (stated in the app)
 

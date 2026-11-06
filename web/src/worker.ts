@@ -49,7 +49,16 @@ self.onmessage = async (ev: MessageEvent) => {
   try {
     if (m.type === 'init') {
       const [gb, pj] = await Promise.all([
-        fetch(m.base + 'data/graph.bin').then((r) => { if (!r.ok) throw new Error('graph.bin ' + r.status); return r.arrayBuffer(); }),
+        // the graph may be split into parts for hosts that limit file size
+        Promise.all(((m.graphParts as string[] | undefined) ?? ['graph.bin']).map((p) =>
+          fetch(m.base + 'data/' + p).then((r) => { if (!r.ok) throw new Error(p + ' ' + r.status); return r.arrayBuffer(); })))
+          .then((parts) => {
+            if (parts.length === 1) return parts[0];
+            const out = new Uint8Array(parts.reduce((a, b) => a + b.byteLength, 0));
+            let o = 0;
+            for (const b of parts) { out.set(new Uint8Array(b), o); o += b.byteLength; }
+            return out.buffer;
+          }),
         fetch(m.base + 'data/pois.json').then((r) => r.json()),
       ]);
       g = new Graph(gb);
@@ -76,8 +85,8 @@ self.onmessage = async (ev: MessageEvent) => {
       const risk = riskFor(m.when, m.profile);
       const routes: WorkerRoute[] = res.routes.map((r) => ({
         ...r,
-        steps: buildSteps(g, r.edges, r.coords),
-        segTier: r.edges.map((e) => tierOf(risk.risk[e], risk.risk[e])),
+        steps: buildSteps(g, r.segEdge, r.coords),
+        segTier: r.segEdge.map((e) => tierOf(risk.risk[e], risk.risk[e])),
         havenList: r.havenIds
           .map((id) => pois[id])
           .filter((p) => CAT_INFO[p.cat].haven >= 0.5)

@@ -55,15 +55,15 @@ function roadLabel(g: Graph, e: number): string {
   return 'the road';
 }
 
-/** coords[i]→coords[i+1] travels along edges[i]. */
-export function buildSteps(g: Graph, edges: number[], coords: LonLat[]): Step[] {
+/** coords[i]→coords[i+1] travels along segEdge[i]. */
+export function buildSteps(g: Graph, segEdge: number[], coords: LonLat[]): Step[] {
   const steps: Step[] = [];
   if (coords.length < 2) return steps;
   const segLen = (i: number) => g.proj.dist(coords[i][0], coords[i][1], coords[i + 1][0], coords[i + 1][1]);
-  let cur: Step = { text: GENERIC.has(roadLabel(g, edges[0])) ? 'Start along the route' : `Head along ${roadLabel(g, edges[0])}`, turn: 'start', distM: 0, at: coords[0], idx: 0 };
-  let curName = roadLabel(g, edges[0]);
+  let cur: Step = { text: GENERIC.has(roadLabel(g, segEdge[0])) ? 'Start along the route' : `Head along ${roadLabel(g, segEdge[0])}`, turn: 'start', distM: 0, at: coords[0], idx: 0 };
+  let curName = roadLabel(g, segEdge[0]);
   for (let i = 0; i < coords.length - 1; i++) {
-    const e = edges[Math.min(i, edges.length - 1)];
+    const e = segEdge[Math.min(i, segEdge.length - 1)];
     const name = roadLabel(g, e);
     if (i > 0 && name !== curName) {
       const inB = bearing(coords[i - 1], coords[i]);

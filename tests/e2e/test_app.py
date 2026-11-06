@@ -12,7 +12,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 GL = ['--no-sandbox', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader']
 PHONE = dict(viewport={'width': 390, 'height': 844}, device_scale_factor=1, is_mobile=True, has_touch=True)
 CP, IG = (77.2197, 28.6328), (77.2295, 28.6129)
-LAJ, GIRI = (77.24024, 28.5682), (77.26285, 28.54035)
+LAJ, GIRI = (77.24318, 28.57009), (77.22429, 28.54259)  # Lajpat Nagar II -> Soami Nagar
 results = []
 
 
@@ -158,7 +158,7 @@ def tc94(b, base):
 @case('TC-96', 'stopping triggers "Are you OK?"; no answer opens SOS')
 def tc96(b, base):
     ctx = b.new_context(**PHONE); page = ctx.new_page()
-    page.goto(base + q(LAJ, GIRI, t='21:30', mode='walk', demo=1, pause='0.2', speed=60)); wait_routes(page)
+    page.goto(base + q(LAJ, GIRI, t='21:30', mode='walk', demo=1, pause='0.2', pauseS=720, speed=60)); wait_routes(page)
     page.locator('#start').click()
     page.wait_for_selector('.checkin', timeout=90000)
     expect(page.locator('.countdown')).to_be_visible()
@@ -183,8 +183,8 @@ def tc98(b, base):
     page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true}))")
     page.goto(base + '/'); page.wait_for_selector('#f-to', timeout=20000); page.wait_for_timeout(2500)
     # pick a visible spot above the sheet, east of the covered area
-    lon = page.evaluate("""() => { const m = window.__sr.map; m.jumpTo({center:[77.345, 28.60], zoom: 14}); return m.unproject([195, 220]).lng; }""")
-    assert lon > 77.29, lon
+    lon = page.evaluate("""() => { const m = window.__sr.map; m.jumpTo({center:[77.405, 28.60], zoom: 14}); return m.unproject([195, 220]).lng; }""")
+    assert lon > 77.36, lon
     page.wait_for_timeout(500)
     page.mouse.click(195, 220, button='right')
     expect(page.locator('#toast')).to_contain_text('outside', timeout=5000)
