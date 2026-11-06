@@ -417,3 +417,27 @@ input[type=text], input[type=tel] { width: 100%; border: 1.5px solid var(--line)
 #sheet .advice { padding: 8px 12px; }
 #sheet .advice strong { font-size: 0.95rem; }
 #sheet .advice p { font-size: 0.86rem; margin: 2px 0 4px; }
+
+/* navigation island: a black capsule at the top, like the iPhone's Dynamic Island */
+.island { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; width: 100%; max-width: 520px; margin: 0 auto;
+  background: #000; color: #fff; border-radius: 34px; padding: 10px 12px 10px 14px; box-shadow: 0 6px 22px rgba(0,0,0,.4); cursor: pointer;
+  transition: border-radius .25s ease, padding .25s ease, box-shadow .25s ease; }
+.island.open { border-radius: 28px; padding: 14px 14px 14px 16px; }
+.island.tier-yellow { box-shadow: 0 0 0 2.5px var(--t-yellow), 0 6px 22px rgba(0,0,0,.4); }
+.island.tier-red, .island.tier-darkred { box-shadow: 0 0 0 2.5px var(--t-red), 0 6px 22px rgba(0,0,0,.4); }
+.isl-arrow { width: 46px; height: 46px; border-radius: 50%; background: #1f1f24; display: inline-flex; align-items: center; justify-content: center; font-size: 1.7rem; font-weight: 800; color: #7cf0a8; }
+.isl-arrow.turn-arrive { color: #ffd166; }
+.isl-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.isl-dist { font-size: 1.4rem; font-weight: 800; }
+.isl-text { font-size: 0.95rem; color: #e8e8f0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.island.open .isl-text { -webkit-line-clamp: 4; }
+.isl-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.isl-eta { font-size: 0.8rem; color: #b9b9c8; font-weight: 600; white-space: nowrap; }
+.isl-voice { width: 36px; height: 36px; border-radius: 50%; border: 0; background: #1f1f24; color: #fff; font-size: 1rem; padding: 0; }
+.isl-more { grid-column: 1 / -1; display: grid; gap: 6px; font-size: 0.9rem; color: #d6d6e2; padding: 6px 2px 0 4px; border-top: 1px solid #26262c; margin-top: 4px; }
+.isl-bar { height: 5px; border-radius: 3px; background: #2a2a31; overflow: hidden; }
+.isl-bar i { display: block; height: 100%; background: #7cf0a8; border-radius: 3px; }
+.isl-ahead { font-weight: 700; }
+.isl-ahead.tier-text-yellow { color: #ffd166; }
+.isl-ahead.tier-text-red, .isl-ahead.tier-text-darkred { color: #ff8a8a; }
+#top .seg-warn { max-width: 520px; width: 100%; margin: 0 auto; }

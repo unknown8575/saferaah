@@ -1,4 +1,4 @@
-"""End-to-end tests (TC-90..TC-108) in headless Chrome at phone size.
+"""End-to-end tests (TC-90..TC-109) in headless Chrome at phone size.
 
 Starts its own server (fresh database) on a free port, runs every case,
 prints a summary and exits non-zero on failure.
@@ -406,6 +406,33 @@ def tc108(b, base):
     ctx.close()
 
 
+SPEECH_SPY = """window.__spoken = [];
+const realSpeak = speechSynthesis.speak.bind(speechSynthesis);
+speechSynthesis.speak = (u) => { if (u.text.trim()) window.__spoken.push(u.text); };"""
+
+
+@case('TC-109', 'navigation island and spoken turns; mute stops the voice')
+def tc109(b, base):
+    ctx = b.new_context(**PHONE); page = ctx.new_page()
+    page.add_init_script(SEEN); page.add_init_script(SPEECH_SPY)
+    page.goto(base + q(LAJ, GIRI, t='21:30', mode='walk', demo=1, speed=12)); wait_routes(page)
+    page.locator('#start').click()
+    page.wait_for_selector('#island', timeout=15000)
+    page.wait_for_function("() => window.__spoken.some(t => t.startsWith('Starting your trip'))", timeout=10000)
+    # an advance instruction ("In 100 metres, turn …") and the turn itself
+    page.wait_for_function("() => window.__spoken.some(t => /^In \\d+ (metres|kilometres?), /.test(t))", timeout=90000)
+    page.wait_for_function("() => window.__spoken.some(t => /^(Turn|Bear|Make|Continue)/.test(t))", timeout=90000)
+    expect(page.locator('#island .isl-dist')).to_contain_text('m')
+    page.locator('#island').click()
+    expect(page.locator('#island .isl-more')).to_contain_text('Arrive')
+    page.locator('#voice-toggle').click()
+    assert page.evaluate('() => JSON.parse(localStorage.getItem("saferaah.v1")).voice') is False
+    n = page.evaluate('() => window.__spoken.length')
+    page.wait_for_timeout(15000)
+    assert page.evaluate('() => window.__spoken.length') == n, 'spoke while muted'
+    ctx.close()
+
+
 def main():
     port, sport = free_port(), free_port()
     env = dict(os.environ, PORT=str(port), DB_PATH=os.path.join(ROOT, 'data', 'e2e.db'), STATIC_DIR=os.path.join(ROOT, 'web', 'dist'))
@@ -431,7 +458,7 @@ def main():
             b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=GL)
             for fn, extra in [(tc90, ()), (tc91, ()), (tc92, ()), (tc93, ()), (tc94, ()), (tc96, ()), (tc97, (static_base,)),
                               (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ()), (tc103, ()), (tc104, ()), (tc105, ()),
-                              (tc106, ()), (tc107, ()), (tc108, ())]:
+                              (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ())]:
                 if only and not any(o in fn.__name__ for o in only): continue
                 fn(b, base, *extra)
             b.close()

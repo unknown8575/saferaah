@@ -15,6 +15,7 @@ import { REPORT_KINDS, type LiveReport, type ReportKind } from '../../shared/liv
 import { darkness, istTime, IST_OFFSET_MIN } from '../../shared/time.ts';
 import { haversine, type LonLat } from '../../shared/geo.ts';
 import type { Profile } from '../../shared/risk.ts';
+import { Guide, ARROW, unlockSpeech, canSpeak, stopSpeaking, fmtShort, prepareNative, type NavInfo } from './nav.ts';
 
 const BASE = import.meta.env.BASE_URL;
 const params = new URLSearchParams(location.search);
@@ -74,6 +75,7 @@ const S = {
     pendingFixes: Fix[]; dest: Place; startedAt: number; clock: () => number; offRoute: boolean;
     tickTimer: ReturnType<typeof setInterval>; pushTimer: ReturnType<typeof setInterval>; result?: any; sos?: boolean;
     rerouting?: boolean; lastReroute: number; lastSaferCheck: number; better: WorkerRoute | null; dismissedBetter?: boolean;
+    guide: Guide; islandOpen: boolean;
   },
 };
 (window as any).__sr = { S, rpc };
@@ -1051,6 +1053,8 @@ function pickByPref(routes: WorkerRoute[], pref: Pref): WorkerRoute | undefined 
 
 async function startJourney() {
   if (!S.reply?.routes.length || !S.to) return;
+  unlockSpeech(); // browsers only allow speech that starts from a tap
+  prepareNative();
   const sim = S.settings.simulate || DEMO;
   if (!sim && !S.loc.fix && !('geolocation' in navigator && S.loc.status !== 'denied')) {
     openModal(h('div', { class: 'modal-card' }, h('h2', null, 'Tracking needs your location'),
@@ -1083,7 +1087,9 @@ async function startJourney() {
     tickTimer: setInterval(() => handleEvents(J.monitor.tick(J.clock())), 15000),
     pushTimer: setInterval(() => flushFixes(), 10000),
     lastReroute: 0, lastSaferCheck: startedAt, better: null,
+    guide: new Guide(() => !S.settings.voice, S.settings.mode === 'walk'), islandOpen: false,
   };
+  J.guide.start(route.steps[0]?.text ?? 'Follow the route', S.to.label);
   S.journey = J;
   S.follow = true;
   setView('journey');
@@ -1152,11 +1158,52 @@ function renderJourney() {
   lastStepIdx = next.idx;
   const clockNow = new Date(J.clock());
   const segTier = J.route.segTier[Math.min(ni, J.route.segTier.length - 1)] ?? 'green';
-  clear(top,
-    h('div', { class: 'instruction', role: 'status' }, h('span', { class: `turn turn-${next.turn}`, 'aria-hidden': 'true' }, turnGlyph(next.turn)),
-      h('div', null, next.turn !== 'arrive' ? h('div', { class: 'in-dist' }, fmtDist(toNext)) : null, h('b', null, next.text))),
-    segTier !== 'green' ? h('div', { class: `seg-warn tier-${segTier}` }, tierIcon(segTier), segTier === 'yellow' ? ' Quieter stretch: stay alert' : ' Risky stretch: keep moving, stay on the main road') : null,
-  );
+  const steps = J.route.steps;
+  const k = steps.indexOf(next);
+  const after = steps[k + 1];
+  const thenText = after && next.distM < (S.settings.mode === 'walk' ? 40 : 120) && next.turn !== 'arrive' ? after.text : undefined;
+  const etaText = clockText(new Date(clockNow.getTime() + remainS * 1000));
+  const info: NavInfo = { text: next.text, turn: next.turn, toNextM: toNext, thenText, remainM: remain, remainS, etaText, tier: segTier,
+    ahead: riskAhead(J.route, ni, S.settings.mode === 'walk' ? 150 : 450), progress: J.route.lengthM ? 1 - remain / J.route.lengthM : 0, destLabel: J.dest.label };
+  J.guide.update(k, info);
+  // a persistent node, so a tap that lands while the island refreshes still counts
+  let voiceBtn = top.querySelector<HTMLButtonElement>('#voice-toggle');
+  if (!voiceBtn && canSpeak()) voiceBtn = h('button', { class: 'isl-voice', id: 'voice-toggle',
+    on: { click: (e: Event) => { e.stopPropagation(); S.settings = save({ voice: !S.settings.voice }); if (!S.settings.voice) stopSpeaking(); renderJourney(); } } }) as HTMLButtonElement;
+  if (voiceBtn) {
+    voiceBtn.textContent = S.settings.voice ? '🔊' : '🔇';
+    voiceBtn.setAttribute('aria-pressed', S.settings.voice ? 'true' : 'false');
+    voiceBtn.setAttribute('aria-label', S.settings.voice ? 'Mute voice guidance' : 'Turn on voice guidance');
+  }
+  // update the island in place: rebuilding it on every GPS fix would swallow taps
+  let island = top.querySelector<HTMLElement>('#island');
+  if (!island) {
+    island = h('div', { role: 'status', id: 'island', tabindex: 0, on: { click: () => { const j = S.journey; if (j) { j.islandOpen = !j.islandOpen; renderJourney(); } } } });
+    clear(top, island, h('div', { id: 'seg-slot' }));
+  }
+  island.className = `island tier-${segTier}${J.islandOpen ? ' open' : ''}`;
+  island.setAttribute('aria-label', `${next.turn === 'arrive' ? '' : fmtDist(toNext) + ', '}${next.text}`);
+  const sig = [next.text, fmtDist(toNext), etaText, J.islandOpen, S.settings.voice, segTier, thenText, info.ahead?.key, Math.round(info.progress * 50)].join('|');
+  if (island.dataset.sig !== sig) {
+    island.dataset.sig = sig;
+    clear(island,
+      h('span', { class: `isl-arrow turn-${next.turn}`, 'aria-hidden': 'true' }, ARROW[next.turn] ?? '↑'),
+      h('div', { class: 'isl-main' },
+        next.turn !== 'arrive' ? h('b', { class: 'isl-dist in-dist' }, fmtDist(toNext)) : null,
+        h('span', { class: 'isl-text' }, next.text)),
+      h('span', { class: 'isl-side' }, voiceBtn, h('span', { class: 'isl-eta' }, etaText)),
+      J.islandOpen ? h('div', { class: 'isl-more' },
+        thenText ? h('div', null, 'Then: ', thenText) : after && next.turn !== 'arrive' ? h('div', null, `Next: ${after.text}`) : null,
+        h('div', null, `Arrive ${etaText} · ${fmtShort(remain)} left · ${fmtDuration(remainS)}`),
+        h('div', { class: 'isl-bar' }, h('i', { style: { width: `${Math.round(info.progress * 100)}%` } })),
+        info.ahead ? h('div', { class: `isl-ahead tier-text-${info.ahead.tier}` }, `${tierIcon(info.ahead.tier)} ${info.ahead.tier === 'yellow' ? 'Quieter' : 'Risky'} stretch in ${fmtShort(info.ahead.inM)} (${fmtShort(info.ahead.lengthM)})`) : null) : null);
+  }
+  const slot = top.querySelector<HTMLElement>('#seg-slot')!;
+  const warn = segTier !== 'green' ? `${tierIcon(segTier)}${segTier === 'yellow' ? ' Quieter stretch: stay alert' : ' Risky stretch: keep moving, stay on the main road'}` : '';
+  if (slot.dataset.w !== warn) {
+    slot.dataset.w = warn;
+    clear(slot, warn ? h('div', { class: `seg-warn tier-${segTier}` }, warn) : null);
+  }
   clear(sheet,
     J.offRoute ? h('div', { class: 'advice advice-caution' }, h('strong', null, J.rerouting ? 'Finding a new safe route…' : 'You left the route'),
       !J.rerouting ? h('button', { class: 'btn small', on: { click: () => autoReroute() } }, 'Find a new safe route') : null) : null,
@@ -1170,9 +1217,26 @@ function renderJourney() {
       h('div', { class: 'journey-actions' },
         h('button', { class: 'btn', on: { click: () => shareTrip() } }, J.handle ? 'Share live' : 'Share'),
         h('button', { class: 'btn ghost', on: { click: () => endJourney(false) } }, 'End'))),
-    J.handle ? h('p', { class: 'fine live' }, h('span', { class: 'live-dot' }), 'Live trip link is active') : h('p', { class: 'fine' }, isOnline() ? '' : 'Offline: live sharing and reviews need an internet connection.'),
+    J.handle ? h('p', { class: 'fine live' }, h('span', { class: 'live-dot' }), 'Live trip link is active') : h('p', { class: 'fine' }, isOnline() ? '' : navigator.onLine ? 'Live trip links and reviews need the SafeRaah server, which this website is not connected to yet. Guidance, check-ins and SOS still work.' : 'Offline: live sharing and reviews need an internet connection.'),
     (S.settings.simulate || DEMO) ? h('p', { class: 'fine' }, 'Demo mode: your movement is simulated.') : null,
   );
+}
+
+/** The next quieter or risky run of the route within `lookM` ahead (spoken once, shown in the island). */
+function riskAhead(r: WorkerRoute, ni: number, lookM: number): NavInfo['ahead'] {
+  const c = r.coords, t = r.segTier;
+  if ((t[ni] ?? 'green') !== 'green') return undefined;
+  let d = 0;
+  for (let j = ni; j < c.length - 1 && d <= lookM; j++) {
+    if (t[j] !== 'green') {
+      let len = 0;
+      for (let q = j; q < c.length - 1 && t[q] !== 'green'; q++) len += haversine(c[q][0], c[q][1], c[q + 1][0], c[q + 1][1]);
+      if (len < 40) return undefined; // too short to mention
+      return { tier: t[j] as Tier, lengthM: len, inM: d, key: j };
+    }
+    d += haversine(c[j][0], c[j][1], c[j + 1][0], c[j + 1][1]);
+  }
+  return undefined;
 }
 
 function turnGlyph(t: string): string {
@@ -1235,6 +1299,7 @@ function switchRoute(route: WorkerRoute, msg: string) {
     etaS: route.timeS, startedAt: J.clock() });
   if (S.myPos) J.monitor.feed(S.myPos);
   J.offRoute = false; J.better = null;
+  J.guide.rerouted(msg.startsWith('Switched') ? 'Switched to the safer route.' : 'New route found.');
   smap.showRoutes([route], 0);
   if (J.handle) api.reroute(J.handle, route.coords, route.edges, route.timeS).catch(() => {});
   toast(msg);
@@ -1350,6 +1415,7 @@ async function endJourney(confirmed: boolean) {
   }
   stopJourney();
   const J = S.journey;
+  J?.guide.stop();
   if (J?.handle) { await flushFixes(); api.finish(J.handle).catch(() => {}); }
   S.journey = null; S.myPos = null;
   leaveNav();
@@ -1360,6 +1426,7 @@ async function endJourney(confirmed: boolean) {
 async function onArrived() {
   const J = S.journey!;
   stopJourney();
+  J.guide.arrived(J.dest.label);
   await flushFixes();
   let result: any = null;
   if (J.handle) { try { result = await api.finish(J.handle); } catch { result = null; } }
@@ -1456,6 +1523,9 @@ function showContacts() {
         h('p', { class: 'hint' }, 'Add up to 5 people who should know when you reach, and who get your SOS.'),
       h('div', { class: 'add-contact' }, name, phone, h('button', { class: 'btn primary', id: 'add-contact', on: { click: add } }, 'Add contact')), err,
       h('p', { class: 'fine' }, 'Contacts stay on this phone. Messages are sent from your own phone by SMS or WhatsApp.'),
+      h('h3', null, 'Voice guidance'),
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', id: 'voice-setting', checked: st.voice, on: { change: (e: Event) => { S.settings = save({ voice: (e.target as HTMLInputElement).checked }); } } }),
+        'Speak the turns during a journey'),
       h('h3', null, 'Demo mode'),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: st.simulate, on: { change: (e: Event) => { S.settings = save({ simulate: (e.target as HTMLInputElement).checked }); } } }),
         'Simulate my movement (to try the app without walking)'),

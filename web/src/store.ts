@@ -13,11 +13,13 @@ export interface Settings {
   seenIntro: boolean;
   /** map layers the user switched on or off */
   layers: { safety: boolean; reports: boolean; pois: boolean; traffic: boolean };
+  /** spoken turn-by-turn guidance */
+  voice: boolean;
 }
 
 const KEY = 'saferaah.v1';
 const DEFAULTS: Settings = { profile: 'woman', mode: 'walk', contacts: [], travellerName: '', simulate: false, seenIntro: false,
-  layers: { safety: true, reports: true, pois: true, traffic: false } };
+  layers: { safety: true, reports: true, pois: true, traffic: false }, voice: true };
 
 let mem: Settings | null = null;
 
