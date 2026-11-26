@@ -90,7 +90,9 @@ export class NoteIndex {
       if (cluster && d.note.cluster === cluster) s *= 1.15;
       return { note: d.note, score: s };
     });
-    return scored.filter((x) => x.score > 0.05).sort((a, b) => b.score - a.score).slice(0, k);
+    const best = Math.max(...scored.map((x) => x.score), 0);
+    // keep only notes that are clearly about the question (not a stray shared word)
+    return scored.filter((x) => x.score > 0.05 && x.score >= 0.35 * best).sort((a, b) => b.score - a.score).slice(0, k);
   }
 
   get notes(): Note[] { return this.docs.map((d) => d.note); }
