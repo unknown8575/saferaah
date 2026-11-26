@@ -68,7 +68,8 @@ export class Ai {
   constructor(private cfg: AiConfig) {
     this.f = cfg.fetch ?? fetch;
     this.models = cfg.model ? [cfg.model, ...MODEL_CANDIDATES.filter((m) => m !== cfg.model)] : [...MODEL_CANDIDATES];
-    this.embedModel = cfg.embedModel ?? 'gemini-embedding-001';
+    // Vertex's multilingual model embeds a whole batch in one call (and knows Hindi)
+    this.embedModel = cfg.embedModel ?? (cfg.geminiKey ? 'gemini-embedding-001' : 'text-multilingual-embedding-002');
     this.project = cfg.project ?? null;
   }
   /** Gemini through an AI Studio key, or through Vertex AI with the service's own identity. */
@@ -130,10 +131,10 @@ export class Ai {
       }, ms);
       return (j.embeddings ?? []).map((e: any) => e.values as number[]);
     }
-    return Promise.all(texts.map(async (t) => {
-      const j = await this.call(this.embedModel, 'predict', { instances: [{ content: t.text, task_type: task, title: t.title }] }, ms, 'us-central1');
-      return j.predictions?.[0]?.embeddings?.values as number[];
-    }));
+    const j = await this.call(this.embedModel, 'predict', {
+      instances: texts.map((t) => ({ content: t.text, task_type: task, ...(t.title ? { title: t.title } : {}) })),
+    }, ms, 'us-central1');
+    return (j.predictions ?? []).map((p: any) => p?.embeddings?.values as number[]);
   }
 
   /** Embeddings of every note, computed once (vector search); retried later if it failed. */
@@ -164,7 +165,14 @@ export class Ai {
     let last: unknown;
     for (const m of [...this.models]) {
       try {
-        return { j: await this.call(m, 'generateContent', body), model: m };
+        try {
+          return { j: await this.call(m, 'generateContent', body), model: m };
+        } catch (err) {
+          // a new project's per-minute quota is small: wait a moment and try once more
+          if ((err as { status?: number }).status !== 429) throw err;
+          await new Promise((r) => setTimeout(r, 1500));
+          return { j: await this.call(m, 'generateContent', body), model: m };
+        }
       } catch (err) {
         last = err;
         // only an unknown or retired model moves on to the next name
@@ -177,12 +185,12 @@ export class Ai {
   }
 
   /** Answer a question: Gemini grounded on our facts and notes, or the built-in engine. */
-  async answer(q: string, ctx: AssistantContext, history: Turn[] = []): Promise<Answer & { fallback?: boolean }> {
+  async answer(q: string, ctx: AssistantContext, history: Turn[] = []): Promise<Answer & { fallback?: boolean; reason?: string }> {
     const useGemini = this.hasGemini && this.takeQuota();
     const dense = useGemini ? await this.dense(q) : undefined;
     const notes = groundingNotes(q, dense);
     const base = compose(q, ctx, notes);
-    if (!useGemini) return base;
+    if (!useGemini) return this.hasGemini ? { ...base, fallback: true, reason: 'daily limit reached' } : base;
     try {
       const p = buildPrompt(q, ctx, notes, history);
       const { j, model } = await this.generate({
@@ -197,7 +205,8 @@ export class Ai {
       return { ...base, text: cleanModelText(text), engine: 'gemini', model: j.modelVersion ?? model };
     } catch (err) {
       console.warn('[saans] Gemini failed, using built-in answer:', (err as Error).message);
-      return { ...base, fallback: true };
+      const st = (err as { status?: number }).status;
+      return { ...base, fallback: true, reason: st === 429 ? 'Gemini is busy' : 'Gemini unavailable' };
     }
   }
 

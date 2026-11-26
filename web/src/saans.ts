@@ -7,7 +7,10 @@ import { icon } from './icons.ts';
 import { load, save } from './store.ts';
 import { api } from './api.ts';
 import { AQI_BANDS, naqi, bandOf, type AirNow } from '../../shared/air.ts';
-import { compose, type RouteSummary, type AssistantContext } from '../../shared/saans/assistant.ts';
+import { compose, placeIntentOf, type RouteSummary, type AssistantContext, type PlaceLite } from '../../shared/saans/assistant.ts';
+import type { Intent as PlaceIntent } from '../../shared/kinds.ts';
+import type { BrowsePlace } from './browse.ts';
+import { fmtDist } from './dom.ts';
 import { dayPlan, TRAVEL_LABEL, hourLabel, type Family, type Travel } from '../../shared/saans/plan.ts';
 
 export interface SaansEnv {
@@ -15,15 +18,24 @@ export interface SaansEnv {
   route: () => RouteSummary | null;
   /** whether the SafeRaah server answers (may wake it up) */
   online: () => boolean | Promise<boolean>;
+  /** nearest places of a kind, looked up on the phone; null when we don't know where the user is */
+  near?: (it: PlaceIntent) => BrowsePlace[] | null;
+  /** open directions to a place */
+  go?: (p: BrowsePlace) => void;
 }
 
-interface Msg { role: 'user' | 'assistant'; text: string; notes?: { n: number; title: string; source: string }[]; engine?: string }
+interface Msg {
+  role: 'user' | 'assistant'; text: string; notes?: { n: number; title: string; source: string }[]; engine?: string;
+  /** why the built-in engine answered instead of Gemini */
+  reason?: string;
+  places?: BrowsePlace[];
+}
 const chat: Msg[] = [];
 let root: HTMLElement | null = null;
 let lastFocus: Element | null = null;
 let airNow: AirNow | null = null;
 
-const SUGGEST = ['Plan my day', 'Which purifier for my bedroom?', 'When can the kids play outside?', 'Greener way to commute', 'Is agarbatti bad indoors?'];
+const SUGGEST = ['Plan my day', 'Which purifier for my bedroom?', 'Plant nurseries near me', 'When can the kids play outside?', 'Greener way to commute', 'Is agarbatti bad indoors?'];
 
 export function closeSaans() {
   if (!root) return;
@@ -38,6 +50,7 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Escape') closeSaans(); }
 
 export async function openSaans(env: SaansEnv, opts: { ask?: string } = {}) {
   if (root) closeSaans();
+  env0 = env;
   lastFocus = document.activeElement;
   const body = h('div', { class: 'saans-body' });
   const msgs = h('div', { class: 'saans-msgs', 'aria-live': 'polite' });
@@ -46,6 +59,7 @@ export async function openSaans(env: SaansEnv, opts: { ask?: string } = {}) {
     'aria-label': 'Ask Saans',
   }) as HTMLInputElement;
   const form = h('form', { class: 'saans-compose', on: { submit: (e: Event) => { e.preventDefault(); ask(env, input.value, msgs); input.value = ''; } } },
+    micButton(input, (text) => ask(env, text, msgs)),
     input, h('button', { class: 'saans-send', type: 'submit', 'aria-label': 'Send' }, icon('send', 18)));
   root = h('div', { class: 'saans', id: 'saans', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Saans clean-air assistant' },
     h('div', { class: 'saans-scrim', on: { click: () => closeSaans() } }),
@@ -216,14 +230,47 @@ function bubble(m: Msg): HTMLElement {
       ul.append(p);
     } else el.append(p);
   }
-  if (m.notes?.length) {
-    el.append(h('details', { class: 'msg-src' }, h('summary', null, `${m.engine === 'gemini' ? 'Gemini' : 'Saans'} · ${m.notes.length} source${m.notes.length > 1 ? 's' : ''}`),
-      h('ol', null, m.notes.map((n) => h('li', null, h('b', null, n.title), ' — ', n.source)))));
+  if (m.places?.length) {
+    el.append(h('ul', { class: 'place-cards' }, m.places.slice(0, 5).map((p) => h('li', null,
+      h('span', { class: 'pc-main' }, h('b', null, p.name), h('small', null,
+        `${p.label} · ${fmtDist(Math.round(p.distM / 50) * 50)}`, p.verified || !p.open ? ` · ${p.open ? 'open' : 'closed'}` : ' · usually open')),
+      env0?.go ? h('button', { class: 'pc-go', 'aria-label': `Directions to ${p.name}`, on: { click: () => env0!.go!(p) } }, icon('navigate', 16)) : null))));
   }
+  const engine = h('span', { class: `eng ${m.engine === 'gemini' ? 'gem' : 'own'}` }, icon(m.engine === 'gemini' ? 'sparkle' : 'leaf', 12),
+    m.engine === 'gemini' ? 'Gemini' : m.reason ? `Built-in answer · ${m.reason}` : 'Built-in answer');
+  el.append(m.notes?.length
+    ? h('details', { class: 'msg-src' }, h('summary', null, engine, ` · ${m.notes.length} source${m.notes.length > 1 ? 's' : ''}`),
+      h('ol', null, m.notes.map((n) => h('li', null, h('b', null, n.title), ' — ', n.source))))
+    : h('div', { class: 'msg-src' }, engine));
   return el;
 }
 
 let busy = false;
+let env0: SaansEnv | null = null;
+
+/** Speak a question instead of typing it (Web Speech API, Indian English; Hinglish works too). */
+function micButton(input: HTMLInputElement, send: (t: string) => void): HTMLElement | null {
+  const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+  if (!SR) return null;
+  const btn = h('button', { class: 'saans-mic', type: 'button', 'aria-label': 'Ask by voice', 'aria-pressed': 'false' }, icon('mic', 18));
+  let rec: any = null;
+  btn.addEventListener('click', () => {
+    if (rec) { rec.stop(); return; }
+    rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true');
+    rec.onresult = (e: any) => {
+      const r = e.results[e.results.length - 1];
+      input.value = r[0].transcript;
+      if (r.isFinal) { const t = input.value; input.value = ''; send(t); }
+    };
+    rec.onend = rec.onerror = () => { rec = null; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); };
+    try { rec.start(); } catch { rec = null; btn.classList.remove('on'); }
+  });
+  return btn;
+}
 async function ask(env: SaansEnv, raw: string, msgs: HTMLElement) {
   const q = raw.trim().slice(0, 500);
   if (!q || busy) return;
@@ -234,16 +281,27 @@ async function ask(env: SaansEnv, raw: string, msgs: HTMLElement) {
   msgs.insertBefore(typing, msgs.querySelector('.saans-chips'));
   typing.scrollIntoView({ block: 'end', behavior: 'smooth' });
   const ctx: AssistantContext = { air: airNow, family: load().family, route: env.route() };
+  // "plant shops near me": the phone finds the places; only names, kinds and distances are sent
+  const pi = placeIntentOf(q);
+  let found: BrowsePlace[] | null = null;
+  if (pi && env.near) {
+    found = env.near(pi);
+    ctx.places = found ? { title: pi.title, items: found.map((p): PlaceLite => ({
+      name: p.name, kind: p.label, distM: Math.round(p.distM / 50) * 50, open: p.verified || !p.open ? p.open : null, similar: p.similar,
+    })) } : null;
+  }
   let ans: Msg;
   try {
     if (!(await env.online())) throw new Error('offline');
     const history = chat.slice(0, -1).slice(-4).map((m) => ({ role: m.role, text: m.text }));
     const r = await api.assistant({ q, ctx, history });
-    ans = { role: 'assistant', text: r.text, notes: r.notes, engine: r.engine };
-  } catch {
+    ans = { role: 'assistant', text: r.text, notes: r.notes, engine: r.engine, reason: r.reason ?? undefined };
+  } catch (err) {
     const r = compose(q, ctx);
-    ans = { role: 'assistant', text: r.text, notes: r.notes, engine: 'saans' };
+    const msg = (err as Error).message;
+    ans = { role: 'assistant', text: r.text, notes: r.notes, engine: 'saans', reason: msg === 'offline' ? 'offline' : /many|break/i.test(msg) ? 'question limit reached' : 'server unreachable' };
   }
+  if (found?.length) ans.places = found;
   busy = false;
   chat.push(ans);
   if (!root) return;

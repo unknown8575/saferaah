@@ -237,11 +237,20 @@ export function createApp(opts: AppOptions): Server {
           areas: (Array.isArray(route.areas) ? route.areas : []).slice(0, 4).map((x: unknown) => String(x).slice(0, 60)),
         } : null,
       };
+      const pl = b.ctx?.places;
+      ctx.places = pl && typeof pl === 'object' && Array.isArray(pl.items) ? {
+        title: String(pl.title ?? 'Places').slice(0, 40),
+        items: pl.items.slice(0, 8).filter((x: any) => x && typeof x.name === 'string').map((x: any) => ({
+          name: x.name.slice(0, 80), kind: String(x.kind ?? '').slice(0, 40),
+          distM: Math.round(num(x.distM, 0, 50000, 0) / 50) * 50,
+          open: x.open === true ? true : x.open === false ? false : null, similar: x.similar === true,
+        })),
+      } : null;
       const history: Turn[] = (Array.isArray(b.history) ? b.history : []).slice(-4)
         .filter((t: any) => (t?.role === 'user' || t?.role === 'assistant') && typeof t.text === 'string')
         .map((t: any) => ({ role: t.role, text: t.text.slice(0, 600) }));
       const a = await opts.ai.answer(q, ctx, history);
-      return { text: a.text, notes: a.notes, cluster: a.cluster, plan: a.plan, engine: a.engine, model: a.model ?? null, fallback: a.fallback ?? false };
+      return { text: a.text, notes: a.notes, cluster: a.cluster, plan: a.plan, engine: a.engine, model: a.model ?? null, fallback: a.fallback ?? false, reason: a.reason ?? null };
     },
 
     'POST /api/journeys': async (req) => {

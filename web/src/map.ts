@@ -126,6 +126,8 @@ const TRAFFIC_KEY = (import.meta.env.VITE_TOMTOM_KEY as string | undefined) ?? '
 export const hasTraffic = () => !!TRAFFIC_KEY;
 
 /** Street risk (0..1) to the same four colours the routes use. */
+/** street air factor (1 = city background) → a smog scale from clean teal to deep purple */
+const AIR_COLOR = ['interpolate', ['linear'], ['get', 'f'], 0.95, '#2fbf9b', 1.12, '#c9c446', 1.3, '#ff9f0a', 1.5, '#d9480f', 1.8, '#7b2cbf'];
 const RISK_COLOR = ['step', ['get', 'r'], TIER_INFO.green.color, 0.32, TIER_INFO.yellow.color, 0.46, TIER_INFO.red.color, 0.6, TIER_INFO.darkred.color];
 
 function circlePolygon(lon: number, lat: number, radiusM: number, n = 48): LonLat[] {
@@ -179,7 +181,7 @@ export class SafeMap {
   private meEl?: HTMLElement;
   theme: Theme = 'day';
   ready: Promise<void>;
-  private vis = { safety: true, traffic: false, pois: true };
+  private vis = { safety: true, traffic: false, pois: true, air: false };
   private safetyDim = false;
   private routeKey = '';
   private drawAnim = 0;
@@ -202,6 +204,10 @@ export class SafeMap {
         attribution: 'Traffic © TomTom' });
       m.addLayer({ id: 'traffic', type: 'raster', source: 'traffic', minzoom: 10, layout: { visibility: this.vis.traffic ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85 } });
     }
+    m.addSource('air', { type: 'geojson', data: empty });
+    m.addLayer({ id: 'air', type: 'line', source: 'air', minzoom: 12.5,
+      layout: { 'line-cap': 'round', 'line-join': 'round', visibility: this.vis.air ? 'visible' : 'none' },
+      paint: { 'line-color': AIR_COLOR as never, 'line-width': ['interpolate', ['linear'], ['zoom'], 12.5, 1.5, 16, 4, 18, 9], 'line-opacity': 0.6, 'line-blur': 1 } });
     m.addSource('safety', { type: 'geojson', data: empty });
     m.addLayer({ id: 'safety', type: 'line', source: 'safety', minzoom: 13.5,
       layout: { 'line-cap': 'round', 'line-join': 'round', visibility: this.vis.safety ? 'visible' : 'none' },
@@ -242,7 +248,7 @@ export class SafeMap {
 
   /** Last data for each overlay, re-applied after a style (day/night) change. */
   private overlay: Record<string, FeatureCollection> = {};
-  private setOverlay(id: 'pois' | 'routes' | 'track' | 'safety' | 'acc', data: FeatureCollection) {
+  private setOverlay(id: 'pois' | 'routes' | 'track' | 'safety' | 'acc' | 'air', data: FeatureCollection) {
     this.overlay[id] = data;
     this.ready.then(() => (this.map.getSource(id) as GeoJSONSource | undefined)?.setData(data as never));
   }
@@ -261,7 +267,7 @@ export class SafeMap {
     return this.ready;
   }
 
-  setLayerVisible(id: 'safety' | 'traffic' | 'pois', on: boolean) {
+  setLayerVisible(id: 'safety' | 'traffic' | 'pois' | 'air', on: boolean) {
     this.vis[id] = on;
     this.ready.then(() => {
       const ids = id === 'pois' ? ['pois', 'poi-label'] : [id];
@@ -275,6 +281,7 @@ export class SafeMap {
     this.ready.then(() => this.map.getLayer('safety') && this.map.setPaintProperty('safety', 'line-opacity', dim ? 0.25 : 0.55));
   }
   setSafety(fc: FeatureCollection) { this.setOverlay('safety', fc); }
+  setAir(fc: FeatureCollection) { this.setOverlay('air', fc); }
 
   setPois(pois: Poi[], open?: Uint8Array) {
     const colorOf: Partial<Record<PoiCat, string>> = { police: '#2E2A78', hospital: '#C2185B', clinic: '#C2185B', pharmacy: '#00897B',

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { NOTES } from '../../shared/saans/knowledge.ts';
 import { NoteIndex, tokens, cosine } from '../../shared/saans/retrieve.ts';
-import { compose, buildPrompt, intentOf, groundingNotes, cleanModelText, factsFor } from '../../shared/saans/assistant.ts';
+import { compose, buildPrompt, intentOf, groundingNotes, cleanModelText, factsFor, placeIntentOf } from '../../shared/saans/assistant.ts';
 import { dayPlan, purifierCadr, commuteSwaps, windowLabel, DEFAULT_FAMILY, type Family } from '../../shared/saans/plan.ts';
 import { parseOpenMeteo, type AirNow } from '../../shared/air.ts';
 
@@ -112,5 +112,33 @@ describe('Saans answers', () => {
   });
   it('TC-182 model output is tidied', () => {
     expect(cleanModelText('## Plan\n**Go** out\n* one\n- two\n\n\n\nend')).toBe('Plan\nGo out\n• one\n• two\n\nend');
+  });
+});
+
+describe('Saans nearby places', () => {
+  const ctx = { air: fakeAir(), family: FAM, route: null };
+  it('TC-183 only "near me" questions about a kind of place become place look-ups', () => {
+    expect(placeIntentOf('Show me nearby plants shops')?.title).toBe('Plant nurseries');
+    expect(placeIntentOf('where can I buy an air purifier')?.title).toBe('Air purifier shops');
+    expect(placeIntentOf('n95 mask kahan milega')?.title).toBe('Medical stores');
+    expect(placeIntentOf('Which purifier for my bedroom?')).toBeNull();
+    expect(placeIntentOf('do plants clean air')).toBeNull();
+    expect(placeIntentOf('Is agarbatti bad indoors?')).toBeNull();
+  });
+  it('TC-184 answers list the phone-found places honestly and carry no coordinates', () => {
+    const places = { title: 'Plant nurseries', items: [
+      { name: 'Ganga Nursery', kind: 'Garden centre', distM: 350, open: true },
+      { name: 'Birju Flowers', kind: 'Florist', distM: 1500, open: null, similar: true },
+    ] };
+    const a = compose('plant shops near me', { ...ctx, places });
+    expect(a.text).toMatch(/Ganga Nursery — 350 m, open/);
+    expect(a.text).toMatch(/1\.5 km/);
+    expect(a.text).toMatch(/don't clean room air/);
+    const f = factsFor({ ...ctx, places }).join('\n');
+    expect(f).toMatch(/not sent or stored/);
+    expect(f).toMatch(/1\. Ganga Nursery — Garden centre, 350 m, open now/);
+    expect(f).not.toMatch(/77\.|28\./);
+    expect(compose('plant shops near me', { ...ctx, places: null }).text).toMatch(/Turn on location/);
+    expect(intentOf('anything', { ...ctx, places })).toBe('places');
   });
 });

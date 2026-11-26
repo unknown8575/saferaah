@@ -20,7 +20,11 @@ export const INTENTS: Intent[] = [
   { title: 'Grocery stores', one: 'grocery store', exact: ['supermarket', 'convenience', 'general', 'greengrocer'], similar: ['dairy', 'department_store', 'marketplace', 'mall', 'butcher', 'bakery'],
     words: ['grocery', 'groceries', 'kirana', 'kiryana', 'general store', 'supermarket', 'mart', 'provision', 'vegetable', 'sabzi', 'fruits', 'ration', 'store'] },
   { title: 'Medical stores', one: 'medical store', exact: ['pharmacy', 'chemist'], similar: ['clinic', 'doctors', 'hospital'],
-    words: ['medical', 'medicine', 'chemist', 'pharmacy', 'dawai', 'dawa', 'medicines'] },
+    words: ['medical', 'medicine', 'chemist', 'pharmacy', 'dawai', 'dawa', 'medicines', 'n95', 'mask', 'masks', 'inhaler'] },
+  { title: 'Plant nurseries', one: 'plant nursery', exact: ['garden_centre', 'agrarian'], similar: ['florist'],
+    words: ['plant', 'plants', 'plant shop', 'plant nursery', 'nursery plants', 'paudhe', 'paudha', 'garden centre', 'garden center', 'gardening', 'seeds', 'gamla', 'pots'] },
+  { title: 'Air purifier shops', one: 'air purifier shop', exact: ['electronics', 'appliance'], similar: ['computer', 'electrical', 'department_store', 'mall'],
+    words: ['air purifier', 'air purifiers', 'purifier', 'purifiers', 'hepa', 'air filter'] },
   { title: 'Salons and parlours', one: 'salon', exact: ['hairdresser', 'beauty'], similar: ['cosmetics', 'massage', 'perfumery', 'tattoo'],
     words: ['salon', 'saloon', 'parlour', 'parlor', 'barber', 'haircut', 'hair cut', 'beauty', 'spa', 'nail', 'makeup', 'threading'] },
   { title: 'Cafés', one: 'café', exact: ['cafe', 'tea'], similar: ['bakery', 'ice_cream', 'fast_food', 'restaurant', 'pastry'],
@@ -137,6 +141,7 @@ export function matchIntent(query: string, knownSubs?: Set<string>): Intent | nu
       if (q === ww) score = 3;
       else if (ww.startsWith(q) && q.length >= 3) score = 2 + q.length / ww.length / 2;
       else if (q.split(' ').some((t) => t === ww) || (` ${q} `).includes(` ${ww} `)) score = 1.5;
+      if (score) score += ww.length / 1000; // a longer matched phrase is more specific
       if (score && (!best || score > best.score)) best = { intent, score };
     }
   }

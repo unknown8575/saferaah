@@ -168,6 +168,19 @@ self.onmessage = async (ev: MessageEvent) => {
       postMessage({ type: 'safetyLines', id: m.id, fc: { type: 'FeatureCollection', features: feats } });
       return;
     }
+    if (m.type === 'airLines') {
+      // every street in view coloured by its estimated pollution factor (busy roads, industry, landfills, reports)
+      const f = airFactors();
+      if (!f) { postMessage({ type: 'airLines', id: m.id, fc: { type: 'FeatureCollection', features: [] } }); return; }
+      const [w, s, e, n] = m.bbox as number[];
+      const feats = g.edgesInBox(w, s, e, n, m.limit ?? 6000).map((ed) => ({
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: g.polyline(ed).map(([x, y]) => [+x.toFixed(6), +y.toFixed(6)]) },
+        properties: { f: Math.round(f[ed] * 100) / 100 },
+      }));
+      postMessage({ type: 'airLines', id: m.id, fc: { type: 'FeatureCollection', features: feats } });
+      return;
+    }
     if (m.type === 'open') {
       // open/closed state of every POI at a time (for the map layer)
       const when = new Date(m.when);

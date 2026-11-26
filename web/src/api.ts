@@ -62,7 +62,7 @@ export const api = {
   review: (journeyId: string, reviewToken: string, rating: number, tags: string[]) =>
     call<{ ok: boolean }>('POST', 'api/reviews', { journeyId, reviewToken, rating, tags }),
   assistant: (b: { q: string; ctx: unknown; history: { role: string; text: string }[] }) =>
-    call<{ text: string; notes: { n: number; id: string; title: string; source: string }[]; engine: 'gemini' | 'saans'; model: string | null; fallback: boolean }>('POST', 'api/assistant', b),
+    call<{ text: string; notes: { n: number; id: string; title: string; source: string }[]; engine: 'gemini' | 'saans'; model: string | null; fallback: boolean; reason: string | null }>('POST', 'api/assistant', b),
   share: (shareId: string) => call<any>('GET', `api/share/${encodeURIComponent(shareId)}`),
   reroute: (j: JourneyHandle, route: LonLat[], edges: number[], etaS: number) =>
     call<{ ok: boolean }>('POST', `api/journeys/${j.id}/route`, { token: j.token, route, edges, etaS }),

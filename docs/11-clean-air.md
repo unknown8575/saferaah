@@ -66,6 +66,10 @@ question ──► retrieve notes ──► compute facts ──► Gemini write
 * **Built-in engine** (`assistant.ts` `compose`): the same notes and facts with intent-specific templates, used when there is no key, Gemini fails, or the phone is offline. The answer card says which engine answered.
 * **Safety and cost**: questions ≤ 500 characters, 20 questions per 10 minutes per phone (pseudonymous key), every field the app sends is clamped, keys live in server environment variables and travel in headers, never in URLs or the app bundle.
 
+### Nearby places for clean-air needs
+
+"Plant nurseries near me", "where can I buy an air purifier", "N95 mask kahan milega": a question is treated as a place look-up only when it names a kind of place *and* has a "near / where / buy / kahan" cue. The phone searches its own index of 26,000 mapped places (`nearbyFor`) around the user's position and sends the server only names, kinds, distances rounded to 50 m and open/closed — never coordinates. Gemini is told to recommend only from that list; the app shows the places as cards with a directions button. For plants, Saans also says honestly that plants don't clean room air measurably.
+
 ## 5. Privacy
 
 The air reading is requested for a ~10 km cell (position rounded to 0.1°). The family profile is stored only in the phone's local storage and removed by "Delete my data on this phone". Conversations live in memory and vanish when the app closes; the server neither logs nor stores questions or answers.

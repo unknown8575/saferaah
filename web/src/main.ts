@@ -17,7 +17,7 @@ import { JourneyMonitor, type Fix, type JourneyEvent } from '../../shared/journe
 import { REPORT_KINDS, isAirReport, type LiveReport, type ReportKind } from '../../shared/live.ts';
 import { AQI_BANDS, type AirNow } from '../../shared/air.ts';
 import { airAt } from './airnow.ts';
-import { openSaans } from './saans.ts';
+import { openSaans, closeSaans } from './saans.ts';
 import type { RouteSummary } from '../../shared/saans/assistant.ts';
 import { darkness, istTime, IST_OFFSET_MIN } from '../../shared/time.ts';
 import { haversine, type LonLat } from '../../shared/geo.ts';
@@ -197,7 +197,7 @@ async function boot() {
     S.bbox = ready.meta.bbox; S.onewayKnown = ready.meta.onewayKnown;
     S.pois = await fetch(BASE + 'data/pois.json').then((r) => r.json());
     const L = S.settings.layers;
-    smap.setLayerVisible('safety', L.safety); smap.setLayerVisible('pois', L.pois); smap.setLayerVisible('traffic', L.traffic && hasTraffic());
+    smap.setLayerVisible('safety', L.safety); smap.setLayerVisible('pois', L.pois); smap.setLayerVisible('air', !!L.air); smap.setLayerVisible('traffic', L.traffic && hasTraffic());
     refreshPois();
     checkServer().then(async (ok) => {
       if (!ok) { if (await initPreviewStore()) refreshReports(true); return; }
@@ -371,7 +371,7 @@ function setupMapGestures() {
   });
   m.on('rotate', () => renderCompass());
   let safetyTimer: ReturnType<typeof setTimeout>;
-  m.on('moveend', () => { clearTimeout(safetyTimer); safetyTimer = setTimeout(refreshSafety, 250); if (S.view === 'pick') updatePickLabel(); });
+  m.on('moveend', () => { clearTimeout(safetyTimer); safetyTimer = setTimeout(() => { refreshSafety(); refreshAirLayer(); }, 250); if (S.view === 'pick') updatePickLabel(); });
 }
 
 function outside() { toast('That point is outside the area this map covers (Delhi NCT).'); }
@@ -1015,6 +1015,8 @@ function airSection(r: WorkerRoute): HTMLElement[] | null {
   const tradeoff = r === cleanest && fastest && TIER_RANK[r.tier] > TIER_RANK[fastest.tier]
     ? h('p', { class: 'tradeoff' }, icon('alert', 15), `Cleaner air, but ${TIER_INFO[r.tier].label.toLowerCase()} for safety at ${clockText(now())}. After dark the safer route may be the better choice.`) : null;
   return [h('h3', null, 'Air on this route'), h('ul', { class: 'facts' }, items), tradeoff ?? null,
+    h('button', { class: 'btn ghost ask-route', id: 'ask-route', on: { click: () => askSaans('How clean is the air on this route, and how can I breathe less on the way?') } },
+      icon('sparkle', 16), 'Ask Saans about this route'),
     h('p', { class: 'fine' }, 'Estimates: the city forecast (CAMS) plus street-level effects of traffic, industry and landfills.')].filter(Boolean) as HTMLElement[];
 }
 
@@ -1035,7 +1037,12 @@ async function refreshAir(): Promise<AirNow | null> {
   return S.air;
 }
 function askSaans(ask?: string) {
-  openSaans({ air: refreshAir, route: routeSummary, online: async () => isOnline() || checkServer() }, { ask });
+  openSaans({
+    air: refreshAir, route: routeSummary, online: async () => isOnline() || checkServer(),
+    // looked up on the phone; the position itself never leaves it
+    near: (it) => { const me = myLonLat(); return me && placesReady() ? nearbyFor(it, me, now(), { min: 5, max: 7 }) : me ? [] : null; },
+    go: (p) => { closeSaans(); S.from = null; S.to = browsePlace(p); S.userPicked = false; S.reply = null; openDirections(); },
+  }, { ask });
 }
 
 function havenLine(r: WorkerRoute): string {
@@ -1105,6 +1112,15 @@ async function refreshSafety() {
   const seq = ++safetySeq;
   const r = await rpc<{ fc: any }>({ type: 'safetyLines', bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], when: now().toISOString(), profile: S.settings.profile, limit: 6000 });
   if (seq === safetySeq) smap.setSafety(r.fc);
+}
+
+let airSeq = 0;
+async function refreshAirLayer() {
+  if (!smap || !S.settings.layers.air || smap.map.getZoom() < 12.5) return;
+  const b = smap.map.getBounds();
+  const seq = ++airSeq;
+  const r = await rpc<{ fc: any }>({ type: 'airLines', bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], limit: 6000 });
+  if (seq === airSeq) smap.setAir(r.fc);
 }
 
 async function refreshReports(force = false) {
@@ -1194,12 +1210,15 @@ function openLayers() {
       S.settings = save({ layers: { ...S.settings.layers, [k]: on } });
       if (k === 'reports') drawReports(); else smap.setLayerVisible(k, on);
       if (k === 'safety' && on) refreshSafety();
+      if (k === 'air') { smap.setLayerVisible('air', on); if (on) refreshAirLayer(); }
     } } }),
     h('span', null, h('b', null, label), h('small', null, note)));
   openModal(h('div', { class: 'modal-card' },
     h('h2', null, 'Map layers'),
     toggle('safety', 'Street safety now', 'Every street coloured by how safe it is at this hour (zoom in to see).'),
     h('div', { class: 'legend' }, (['green', 'yellow', 'red', 'darkred'] as Tier[]).map((t) => h('span', null, h('i', { style: { background: TIER_INFO[t].color } }), TIER_INFO[t].label))),
+    toggle('air', 'Street air (estimate)', 'Streets coloured by how polluted the air usually is there: busy roads, industrial areas and landfills are darker.'),
+    h('div', { class: 'legend air-legend' }, [['#2fbf9b', 'Cleaner'], ['#c9c446', 'Some traffic'], ['#ff9f0a', 'Busy road'], ['#d9480f', 'Industry'], ['#7b2cbf', 'Landfill / worst']].map(([c, l]) => h('span', null, h('i', { style: { background: c } }), l))),
     toggle('reports', 'Live reports', liveAvailable() ? `Problems other travellers reported in the last few hours${livePreview() ? ' (shared by everyone using this preview)' : ''}.` : 'Needs an internet connection.'),
     toggle('pois', 'Safe places', 'Police, hospitals, medical stores, metro and petrol pumps. Filled = open now.'),
     hasTraffic() ? toggle('traffic', 'Traffic', 'Live traffic speed on roads.') : null,

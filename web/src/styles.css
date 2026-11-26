@@ -661,7 +661,7 @@ ul.privacy li::marker { color: var(--t-green); }
 
 .saans-msgs { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
 .saans-hello p { color: var(--ink-2); font-size: 0.9375rem; margin: 0; }
-.msg { max-width: 88%; padding: 10px 14px; border-radius: 20px; font-size: 0.9375rem; line-height: 1.42; animation: up .4s var(--spring) both; overflow-wrap: break-word; }
+.msg { width: max-content; max-width: 88%; min-width: 0; box-sizing: border-box; word-break: normal; padding: 10px 14px; border-radius: 20px; font-size: 0.9375rem; line-height: 1.42; animation: up .4s var(--spring) both; overflow-wrap: break-word; }
 .msg.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
 .msg.bot { align-self: flex-start; background: var(--surface); box-shadow: inset 0 0 0 0.5px var(--hair); border-bottom-left-radius: 6px; }
 .msg.bot p { margin: 0 0 6px; }
@@ -701,3 +701,19 @@ ul.privacy li::marker { color: var(--t-green); }
 .fe-actions { display: flex; gap: 10px; margin: 16px 0 8px; }
 .fe-actions .btn { flex: 1; }
 @media (prefers-reduced-motion: reduce) { .saans-orb { animation: none; } }
+
+.msg.me { white-space: pre-wrap; }
+.msg.bot { width: auto; }
+.eng { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.eng.gem { background: linear-gradient(90deg, #4285f4, #9b72cb, #d96570); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.eng.gem svg { color: #4285f4; }
+.place-cards { list-style: none; margin: 8px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.place-cards li { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border-radius: 14px; background: var(--fill); }
+.pc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pc-main b { font-size: 0.9375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-main small { color: var(--ink-2); font-size: 0.8125rem; }
+.pc-go { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--accent); color: #fff; }
+.saans-mic { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--fill); color: var(--ink); }
+.saans-mic.on { background: #ff3b30; color: #fff; animation: breathe 1.2s ease-in-out infinite; }
+.ask-route { display: flex; gap: 8px; width: 100%; margin: 10px 0 4px; color: var(--accent); }
+.air-legend i { border-radius: 3px; }

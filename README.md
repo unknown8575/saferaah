@@ -44,8 +44,8 @@ Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-te
 
 ```bash
 npm run typecheck
-npm test               # 122 unit + API tests (vitest)
-npm run build && npm run test:e2e   # 24 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
+npm test               # 127 unit + API tests (vitest)
+npm run build && npm run test:e2e   # 26 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
 python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web/public/help/
 ```
 
@@ -54,7 +54,8 @@ python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web
 * **Live AQI card** on the home screen: Indian National AQI from PM2.5/PM10, the band's advice, and how many times above the WHO guideline the air is. Tap it to open Saans.
 * **Cleanest air route.** Air at street level is estimated from the city forecast × a street factor: busy road up to +60 %, beside one up to +25 %, industrial land up to +50 %, next to a landfill up to +60 %, parks −10 %. The dose is that × minutes × breathing rate for your way of travelling (walking breathes 1.4 m³/h; a closed car lets in ~60 %). The route with the lowest dose is labelled *Cleanest air* with "N% less PM2.5 breathed than fastest" and the industrial areas it avoids. When the fastest route is already the cleanest, the app says so instead of inventing a detour. If the cleanest route is less safe at night, the details say so.
 * **Air reports:** garbage burning, construction dust and heavy smoke can be reported like safety problems; clean-air routes avoid them until they expire (they don't change safety colours).
-* **Saans** (सांस, "breath"): a next-24-hours plan for *your* family (children, elders, asthma, pregnancy, cooking fuel, bedroom size, commute; kept only on the phone), purifier sizing, cooking smoke, masks, school runs, and swaps with CO₂ saved per month. Every number is computed in code; Gemini only explains it and cites the notes it used. Without a key it still answers from the built-in engine.
+* **Street air layer** (Layers → Street air): every street coloured by its estimated pollution, from clean teal to landfill purple.
+* **Saans** (सांस, "breath"): a next-24-hours plan for *your* family (children, elders, asthma, pregnancy, cooking fuel, bedroom size, commute; kept only on the phone), purifier sizing, cooking smoke, masks, school runs, and swaps with CO₂ saved per month. Every number is computed in code; Gemini only explains it and cites the notes it used. Without a key it still answers from the built-in engine. Ask "plant nurseries near me", "where to buy an air purifier" or "N95 masks nearby": the phone finds the nearest places itself and sends Gemini only their names, kinds and distances (never your position), and the answer comes with tap-for-directions cards. Questions can be spoken (mic button), and every route's details have "Ask Saans about this route".
 
 Google services (all optional, set on the server only):
 

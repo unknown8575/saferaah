@@ -538,6 +538,53 @@ def tc148(b, base):
     ctx.close()
 
 
+@case('TC-149', 'Saans finds plant nurseries near you on the phone and opens directions; long questions wrap')
+def tc149(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    fake_air(ctx)
+    sent = []
+    ctx.on('request', lambda r: sent.append(r.post_data or '') if '/api/assistant' in r.url else None)
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/')
+    page.wait_for_function('window.__sr && window.__sr.S.loc.fix')
+    page.wait_for_timeout(3500)  # nearby-places index loads a moment after start
+    page.click('#aqi-card')
+    page.wait_for_selector('#saans-q')
+    page.fill('#saans-q', 'Show me plant nurseries near me')
+    page.press('#saans-q', 'Enter')
+    page.wait_for_selector('.msg.bot .place-cards li', timeout=20000)
+    assert page.locator('.msg.bot .place-cards li').count() >= 3
+    body = sent[-1]
+    assert '"places"' in body and '77.2' not in body and '28.6' not in body, 'only names and distances may leave the phone'
+    # a long question stays one readable bubble
+    page.fill('#saans-q', 'Which purifier would you recommend for a small bedroom where my grandmother sleeps?')
+    page.press('#saans-q', 'Enter')
+    page.wait_for_function("document.querySelectorAll('.msg.bot:not(.typing)').length >= 2", timeout=20000)
+    w = page.evaluate("document.querySelectorAll('.msg.me')[1].getBoundingClientRect().width")
+    assert w > 200, w
+    page.locator('.msg.bot .pc-go').first.click()
+    page.wait_for_selector('#saans', state='detached')
+    wait_routes(page)
+    ctx.close()
+
+
+@case('TC-149b', 'street air layer colours streets; route details offer Ask Saans')
+def tc149b(b, base):
+    ctx = b.new_context(**PHONE)
+    fake_air(ctx)
+    page = ctx.new_page(); page.add_init_script("localStorage.setItem('saferaah.v1', JSON.stringify({seenIntro:true, layers:{safety:false, reports:true, pois:true, traffic:false, air:true}}))")
+    page.goto(base + q((77.1300, 28.6350), (77.0850, 28.6250), mode='auto', t='10:00'))
+    wait_routes(page)
+    page.evaluate("window.__sr.map.jumpTo({center:[77.13,28.635], zoom:15})")
+    page.wait_for_function("window.__sr.map.querySourceFeatures('air').length > 50", timeout=20000)
+    page.click('#details-btn')
+    page.wait_for_selector('#ask-route')
+    page.click('#ask-route')
+    page.wait_for_selector('.msg.bot:not(.typing)', timeout=20000)
+    expect(page.locator('.msg.bot').last).to_contain_text('fastest')
+    ctx.close()
+
+
 def main():
     port, sport = free_port(), free_port()
     env = dict(os.environ, PORT=str(port), DB_PATH=os.path.join(ROOT, 'data', 'e2e.db'), STATIC_DIR=os.path.join(ROOT, 'web', 'dist'))
@@ -564,7 +611,7 @@ def main():
             for fn, extra in [(tc90, ()), (tc91, ()), (tc92, ()), (tc93, ()), (tc94, ()), (tc96, ()), (tc97, (static_base,)),
                               (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ()), (tc103, ()), (tc104, ()), (tc105, ()),
                               (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ()), (tc144, ()),
-                              (tc145, ()), (tc146, ()), (tc147, ()), (tc148, ())]:
+                              (tc145, ()), (tc146, ()), (tc147, ()), (tc148, ()), (tc149, ()), (tc149b, ())]:
                 if only and not any(o in fn.__name__ for o in only): continue
                 fn(b, base, *extra)
             b.close()

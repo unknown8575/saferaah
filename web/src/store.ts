@@ -13,7 +13,7 @@ export interface Settings {
   simulate: boolean;
   seenIntro: boolean;
   /** map layers the user switched on or off */
-  layers: { safety: boolean; reports: boolean; pois: boolean; traffic: boolean };
+  layers: { safety: boolean; reports: boolean; pois: boolean; traffic: boolean; air?: boolean };
   /** spoken turn-by-turn guidance */
   voice: boolean;
   /** who Saans plans for (kept on this phone only) */

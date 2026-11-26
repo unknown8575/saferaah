@@ -9,6 +9,7 @@
 import { AQI_BANDS, type AirNow } from '../air.ts';
 import { NOTES, CLUSTERS, type Cluster, type Note } from './knowledge.ts';
 import { NoteIndex } from './retrieve.ts';
+import { matchIntent, type Intent as PlaceIntent } from '../kinds.ts';
 import { dayPlan, purifierCadr, commuteSwaps, TRAVEL_LABEL, CO2_PER_KM, atLeast, type Family, type DayPlan } from './plan.ts';
 
 export interface RouteSummary {
@@ -20,10 +21,30 @@ export interface RouteSummary {
   avoided: string[];
   areas: string[];
 }
+/** A nearby place found ON THE PHONE. Only these fields leave it: no coordinates. */
+export interface PlaceLite {
+  name: string;
+  kind: string;
+  /** distance from the user, rounded to 50 m */
+  distM: number;
+  open: boolean | null;
+  /** a similar kind, shown because few exact matches are mapped nearby */
+  similar?: boolean;
+}
 export interface AssistantContext {
   air: AirNow | null;
   family: Family;
   route?: RouteSummary | null;
+  /** places the phone found for a "near me" question */
+  places?: { title: string; items: PlaceLite[] } | null;
+}
+
+const NEAR_CUE = /\b(near|nearby|nearest|around|close by|closest|where|buy|shop|shops|store|stores|kahan|kaha|kidhar|paas|nazdeek|milega|milenge|find)\b/i;
+/** "Show me plant shops nearby" → the kind of place to look up on the phone (null if not a place question). */
+export function placeIntentOf(q: string): PlaceIntent | null {
+  if (!NEAR_CUE.test(q)) return null;
+  const it = matchIntent(q);
+  return it && it.title !== 'Shops' ? it : null;
 }
 export interface Turn { role: 'user' | 'assistant'; text: string }
 export interface Answer {
@@ -35,8 +56,9 @@ export interface Answer {
   model?: string;
 }
 
-export type Intent = 'plan' | 'purifier' | 'route' | 'swaps' | 'mask' | 'general';
-export function intentOf(q: string): Intent {
+export type Intent = 'places' | 'plan' | 'purifier' | 'route' | 'swaps' | 'mask' | 'general';
+export function intentOf(q: string, ctx?: AssistantContext): Intent {
+  if (ctx?.places?.items.length || placeIntentOf(q)) return 'places';
   const s = q.toLowerCase();
   if (/\b(plan|routine|schedule|today|tomorrow|aaj|kal|my day|day plan|din)\b/.test(s)) return 'plan';
   if (/purifier|cadr|hepa|air clean/.test(s)) return 'purifier';
@@ -53,9 +75,14 @@ export const noteIndex = () => index;
 export function groundingNotes(q: string, dense?: number[]): Note[] {
   const hits = index.search(q, 3, dense).map((x) => x.note);
   const must: Record<Intent, string[]> = {
-    plan: ['timing'], purifier: ['purifier-size'], route: ['quiet-streets'], swaps: ['co2-modes', 'idling', 'burning'], mask: ['mask'], general: [],
+    places: [], plan: ['timing'], purifier: ['purifier-size'], route: ['quiet-streets'], swaps: ['co2-modes', 'idling', 'burning'], mask: ['mask'], general: [],
   };
-  const need = must[intentOf(q)].map((id) => NOTES.find((x) => x.id === id)!).filter(Boolean);
+  const it = intentOf(q);
+  if (it === 'places') {
+    const t = placeIntentOf(q)?.title ?? '';
+    must.places = /plant/i.test(t) ? ['plants'] : /purifier/i.test(t) ? ['purifier-size', 'purifier-care'] : /medical/i.test(t) ? ['mask'] : [];
+  }
+  const need = must[it].map((id) => NOTES.find((x) => x.id === id)!).filter(Boolean);
   return [...need, ...hits.filter((n) => !need.includes(n))].slice(0, Math.max(4, need.length));
 }
 
@@ -70,6 +97,13 @@ export function factsFor(ctx: AssistantContext, plan = dayPlan(ctx.air, ctx.fami
   if (fam.pregnant) members.push('a pregnant family member');
   f.push(`Family: ${members.join(', ')}; cooks with ${fam.cooking}; bedroom ${fam.bedroomM2} m².`);
   if (fam.commute) f.push(`Commute: ${fam.commute.km} km each way by ${TRAVEL_LABEL[fam.commute.mode]} (≈${Math.round(CO2_PER_KM[fam.commute.mode] * fam.commute.km * 44)} kg CO₂ a month).`);
+  const pl = ctx.places;
+  if (pl) {
+    f.push(pl.items.length
+      ? `${pl.title} near the user, found on their phone (their location is not sent or stored):`
+      : `No ${pl.title.toLowerCase()} are mapped near the user.`);
+    pl.items.forEach((p, i) => f.push(`  ${i + 1}. ${p.name} — ${p.kind}${p.similar ? ' (similar kind)' : ''}, ${p.distM < 1000 ? `${p.distM} m` : `${(p.distM / 1000).toFixed(1)} km`}, ${p.open === null ? 'hours unknown' : p.open ? 'open now' : 'closed now'}`));
+  }
   const r = ctx.route;
   if (r) {
     f.push(r.pctLess >= 3
@@ -91,7 +125,8 @@ Rules:
 - Keep it short: at most 140 words, a one-line answer first, then up to 5 short bullet points. No headings, no tables.
 - Reply in the user's language and script (English, Hindi or Hinglish).
 - You are not a doctor. For breathing trouble, chest pain or a child wheezing, say to get medical help and call 112 in an emergency.
-- If the question is not about air, health from air, routes or the environment, say briefly that you help with clean air and suggest one thing you can do.`;
+- If FACTS list nearby places, recommend only from that list, nearest open ones first, with their distance; never invent places, addresses or phone numbers. The app shows them as cards with directions.
+- If the question is not about air, health from air, routes, places for clean-air needs or the environment, say briefly that you help with clean air and suggest one thing you can do.`;
 
 export function buildPrompt(q: string, ctx: AssistantContext, notes: Note[], history: Turn[] = []) {
   const facts = factsFor(ctx);
@@ -125,7 +160,7 @@ const firstSentences = (t: string, n = 2) => t.split(/(?<=\.)\s+/).slice(0, n).j
 /** A specific answer built from the plan and notes, without a language model. */
 export function compose(q: string, ctx: AssistantContext, notes = groundingNotes(q)): Answer {
   const plan = dayPlan(ctx.air, ctx.family);
-  const intent = intentOf(q);
+  const intent = intentOf(q, ctx);
   const lines: string[] = [];
   const air = ctx.air;
   const band = plan.band;
@@ -133,6 +168,18 @@ export function compose(q: string, ctx: AssistantContext, notes = groundingNotes
   const fam = ctx.family;
 
   switch (intent) {
+    case 'places': {
+      const pl = ctx.places;
+      if (!pl) { lines.push('Turn on location (or mark where you are on the map) and ask again, and I will list the nearest ones. Your location stays on your phone.'); break; }
+      if (!pl.items.length) { lines.push(`I could not find ${pl.title.toLowerCase()} mapped near you. Map data in some areas is thin; try a nearby market.`); break; }
+      const open = pl.items.filter((p) => p.open);
+      lines.push(`${pl.title} near you${open.length ? ` (${open.length} open now)` : ''}:`);
+      for (const p of pl.items.slice(0, 5)) lines.push(`• ${p.name} — ${p.distM < 1000 ? `${p.distM} m` : `${(p.distM / 1000).toFixed(1)} km`}${p.open === null ? '' : p.open ? ', open' : ', closed'}${p.similar ? ` (${p.kind.toLowerCase()})` : ''}`);
+      if (/plant|nurser/i.test(pl.title)) lines.push(`• Plants are lovely, but they don't clean room air measurably; for that use a purifier${cite(notes, 'plants')}.`);
+      if (/purifier/i.test(pl.title)) lines.push(`• Pick a CADR of at least ${purifierCadr(fam.bedroomM2)} m³/h for your ${fam.bedroomM2} m² bedroom${cite(notes, 'purifier-size')}.`);
+      if (/medical/i.test(pl.title) && /mask|n95/i.test(q)) lines.push(`• Ask for a fitted N95 (not cloth or loose surgical)${cite(notes, 'mask')}.`);
+      break;
+    }
     case 'plan': {
       lines.push(`${lead} Here is your day${cite(notes, 'timing')}:`);
       for (const it of plan.items.slice(0, 6)) lines.push(`• ${it.when ? it.when + ' — ' : ''}${it.title}${it.impact ? ` (${it.impact})` : ''}`);
