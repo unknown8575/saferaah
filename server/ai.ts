@@ -52,7 +52,7 @@ async function withTimeout<T>(ms: number, f: (signal: AbortSignal) => Promise<T>
 }
 
 /** Model names to try, newest-stable aliases first; the first that answers is kept. */
-const MODEL_CANDIDATES = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+const MODEL_CANDIDATES = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const META = 'http://metadata.google.internal/computeMetadata/v1';
 
 export class Ai {
@@ -175,9 +175,11 @@ export class Ai {
         }
       } catch (err) {
         last = err;
-        // only an unknown or retired model moves on to the next name
-        if ((err as { status?: number }).status !== 404) throw err;
-        console.warn(`[saans] model ${m} not available, trying the next one`);
+        // an unknown or retired model (404), or one this billing account may not use (403),
+        // moves on to the next name; anything else is a real error
+        const st = (err as { status?: number }).status;
+        if (st !== 404 && st !== 403) throw err;
+        console.warn(`[saans] model ${m} not available (${st}), trying the next one`);
         this.models = this.models.filter((x) => x !== m).concat(m);
       }
     }

@@ -141,6 +141,7 @@ describe('Saans API', () => {
         const n = JSON.parse(init.body).instances.length;
         return json({ predictions: Array.from({ length: n }, () => ({ embeddings: { values: [1, 0] } })) });
       }
+      if (url.includes('gemini-3.8-flash:generateContent')) return json({ error: { message: 'Access requires an eligible paid billing account' } }, 403);
       if (url.includes('gemini-flash-latest:generateContent')) return json({ error: { message: 'not found' } }, 404);
       if (url.includes(':generateContent')) {
         expect(init.headers.authorization).toBe('Bearer tok-1');
@@ -153,14 +154,14 @@ describe('Saans API', () => {
     const a = await ai.answer('Which purifier?', { air: null, family: cleanFamily({}), route: null });
     expect(a.engine).toBe('gemini');
     expect(a.text).toBe('Use a 180 m³/h purifier [1].');
-    expect(a.model).toBe('gemini-3.8-flash');
+    expect(a.model).toBe('gemini-3.5-flash');
     const gen = seen.filter((u) => u.includes(':generateContent'));
-    expect(gen[0]).toBe('https://aiplatform.googleapis.com/v1/projects/my-proj/locations/global/publishers/google/models/gemini-flash-latest:generateContent');
+    expect(gen[0]).toBe('https://aiplatform.googleapis.com/v1/projects/my-proj/locations/global/publishers/google/models/gemini-3.8-flash:generateContent');
     expect(seen.some((u) => u.startsWith('https://us-central1-aiplatform.googleapis.com/v1/projects/my-proj/locations/us-central1/publishers/google/models/text-multilingual-embedding-002:predict'))).toBe(true);
     // the working model is remembered: the next answer goes straight to it
     seen.length = 0;
     await ai.answer('mask?', { air: null, family: cleanFamily({}), route: null });
-    expect(seen.filter((u) => u.includes(':generateContent'))[0]).toContain('gemini-3.8-flash');
+    expect(seen.filter((u) => u.includes(':generateContent'))[0]).toContain('gemini-3.5-flash');
     expect(seen.filter((u) => u.includes('/token'))).toHaveLength(0); // token cached
   });
   it('TC-198 behind Cloud Run, the per-network limit uses the address Google appends, not a forged one', async () => {
