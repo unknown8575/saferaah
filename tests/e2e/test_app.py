@@ -7,6 +7,8 @@ usage:  npm run build && python3 -I tests/e2e/test_app.py
 """
 import json, math, os, socket, subprocess, sys, time, traceback, functools, http.server, threading
 from playwright.sync_api import sync_playwright, expect
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from airfix import install as fake_air  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 GL = ['--no-sandbox', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader']
@@ -457,6 +459,85 @@ def tc144(b, base):
     ctx.close()
 
 
+@case('TC-145', 'home shows live AQI; Saans opens with forecast, plan and a cited answer')
+def tc145(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    fake_air(ctx)
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/')
+    page.wait_for_function("document.querySelector('#aqi-card .aqi-ring')?.textContent.match(/^\\d+$/)", timeout=30000)
+    expect(page.locator('#aqi-card')).to_contain_text('air')
+    page.click('#aqi-card')
+    page.wait_for_selector('.saans-hero .hero-num')
+    assert page.locator('.hero-bars rect').count() >= 20
+    assert page.locator('.plan-item').count() >= 3
+    expect(page.locator('#saans')).to_have_attribute('aria-modal', 'true')
+    page.fill('#saans-q', 'Which purifier for my bedroom?')
+    page.press('#saans-q', 'Enter')
+    page.wait_for_selector('.msg.bot:not(.typing)')
+    bot = page.locator('.msg.bot:not(.typing)').last
+    expect(bot).to_contain_text('m³/h')
+    assert bot.locator('sup.cite').count() >= 1
+    page.keyboard.press('Escape')
+    page.wait_for_selector('#saans', state='detached')
+    ctx.close()
+
+
+@case('TC-146', 'family profile is saved on the phone and changes the plan')
+def tc146(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    fake_air(ctx)
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/')
+    page.wait_for_selector('#aqi-card')
+    page.click('#aqi-card')
+    page.wait_for_selector('#family-edit')
+    expect(page.locator('#family-edit')).to_contain_text('Set up')
+    page.click('#family-edit')
+    page.click('[aria-label="More children"]')
+    page.click('text=Someone has asthma or a lung condition')
+    page.click('.seg[aria-label="Commute mode"] >> text=Car')
+    page.click('#family-save')
+    expect(page.locator('#family-edit')).to_contain_text('1 child')
+    expect(page.locator('#family-edit')).to_contain_text('asthma')
+    expect(page.locator('.saans-plan')).to_contain_text('kg less CO₂')
+    fam = page.evaluate("JSON.parse(localStorage.getItem('saferaah.v1')).family")
+    assert fam['children'] == 1 and fam['asthma'] is True and fam['commute']['mode'] == 'car', fam
+    ctx.close()
+
+
+@case('TC-147', 'routes show air; details explain PM2.5 and named industrial areas')
+def tc147(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    fake_air(ctx)
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + q((77.1300, 28.6350), (77.0850, 28.6250), mode='auto', t='10:00'))
+    wait_routes(page)
+    assert page.locator('.rc-air').count() == page.locator('.route-card').count()
+    labels = page.locator('.route-card .lbl').all_inner_texts()
+    notes = page.locator('.air-note').count()
+    assert any('Cleanest air' in l for l in labels) or notes == 1, (labels, notes)
+    page.click('#details-btn')
+    expect(page.locator('#sheet')).to_contain_text('Air on this route')
+    expect(page.locator('#sheet')).to_contain_text('busy roads')
+    ctx.close()
+
+
+@case('TC-148', 'report sheet offers air problems (burning, dust, smoke) apart from safety')
+def tc148(b, base):
+    ctx = b.new_context(**PHONE, permissions=['geolocation'], geolocation={'latitude': CP[1], 'longitude': CP[0], 'accuracy': 10})
+    page = ctx.new_page(); page.add_init_script(SEEN)
+    page.goto(base + '/')
+    page.wait_for_selector('#report-btn')
+    page.wait_for_function('window.__sr && window.__sr.S.loc.fix')
+    page.click('#report-btn')
+    page.wait_for_selector('.report-kind.air')
+    assert page.locator('.report-kind.air').count() == 3
+    page.click('[data-kind="burning"]')
+    expect(page.locator('#toast')).to_contain_text('clean-air routes', timeout=10000)
+    ctx.close()
+
+
 def main():
     port, sport = free_port(), free_port()
     env = dict(os.environ, PORT=str(port), DB_PATH=os.path.join(ROOT, 'data', 'e2e.db'), STATIC_DIR=os.path.join(ROOT, 'web', 'dist'))
@@ -482,7 +563,8 @@ def main():
             b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=GL)
             for fn, extra in [(tc90, ()), (tc91, ()), (tc92, ()), (tc93, ()), (tc94, ()), (tc96, ()), (tc97, (static_base,)),
                               (tc98, ()), (tc99, ()), (tc100, ()), (tc101, ()), (tc102, ()), (tc103, ()), (tc104, ()), (tc105, ()),
-                              (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ()), (tc144, ())]:
+                              (tc106, ()), (tc107, ()), (tc108, ()), (tc109, ()), (tc144, ()),
+                              (tc145, ()), (tc146, ()), (tc147, ()), (tc148, ())]:
                 if only and not any(o in fn.__name__ for o in only): continue
                 fn(b, base, *extra)
             b.close()

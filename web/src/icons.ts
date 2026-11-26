@@ -8,7 +8,7 @@ import {
   Siren, Trees, Store, School, Building2, Lock, Lightbulb, Construction, Eye, BedDouble, Map as MapIcon, Bus, Sparkles,
   Dumbbell, Coffee, Scissors, ShoppingCart, Shirt, Smartphone, Croissant, IceCreamCone, Banknote, BookOpen, Gem, Glasses, Film,
   Toilet, SquareParking, WashingMachine, Wrench, PawPrint, Mail, GraduationCap, Library, Flower2, Sofa, Beer, Laptop, Printer,
-  Hammer, Plug, Pizza, Church, Hotel,
+  Hammer, Plug, Pizza, Church, Hotel, Flame, Wind, Leaf, Factory, HeartPulse, Fan, Send, Baby, CloudFog, House, ChefHat, Sprout, Activity,
   type IconNode,
 } from 'lucide';
 
@@ -27,6 +27,8 @@ const ICONS: Record<string, IconNode> = {
   parking: SquareParking, laundry: WashingMachine, repair: Wrench, pet: PawPrint, post: Mail, education: GraduationCap,
   library: Library, flower: Flower2, furniture: Sofa, bar: Beer, laptop: Laptop, print: Printer, hardware: Hammer, ev: Plug,
   restaurant: Pizza, worship: Church, stay: Hotel,
+  burning: Flame, dust: Construction, smoke: CloudFog, wind: Wind, leaf: Leaf, factory: Factory, health: HeartPulse, fan: Fan,
+  send: Send, child: Baby, home: House, cook: ChefHat, sprout: Sprout, activity: Activity,
   // turn arrows
   start: ArrowUp, straight: ArrowUp, slight_left: ArrowUpLeft, left: CornerUpLeft, sharp_left: ArrowDownLeft,
   slight_right: ArrowUpRight, right: CornerUpRight, sharp_right: ArrowDownRight, uturn: Undo2, arrive: Flag,
@@ -55,6 +57,7 @@ export function placeIcon(kind: string): string {
 
 export const REPORT_ICON: Record<string, string> = {
   dark: 'dark', deserted: 'deserted', harassment: 'harassment', drunk: 'drunk', followed: 'followed', dogs: 'dogs', police: 'patrol',
+  burning: 'burning', dust: 'dust', smoke: 'smoke',
 };
 
 /** Icon for a precise place type (gym, cafe, salon…). */

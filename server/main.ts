@@ -4,6 +4,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createApp } from './app.ts';
 import { openDb } from './db.ts';
+import { Ai, aiConfigFromEnv } from './ai.ts';
 
 const port = Number(process.env.PORT ?? 8787);
 const staticDir = resolve(process.env.STATIC_DIR ?? 'web/dist');
@@ -16,5 +17,6 @@ try {
 } catch {
   console.warn('graph.bin not found in', staticDir, '— run `npm run build` first');
 }
-const server = createApp({ db: openDb(dbPath), staticDir, graphVersion });
-server.listen(port, () => console.log(`SafeRaah running on http://localhost:${port}  (graph ${graphVersion})`));
+const ai = new Ai(aiConfigFromEnv());
+const server = createApp({ db: openDb(dbPath), staticDir, graphVersion, ai });
+server.listen(port, () => console.log(`SafeRaah running on http://localhost:${port}  (graph ${graphVersion}; Gemini ${ai.hasGemini ? 'on' : 'off'})`));

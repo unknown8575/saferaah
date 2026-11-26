@@ -1,4 +1,6 @@
-# SafeRaah — safe routes for women and children (Delhi)
+# SafeRaah — safe, clean-air routes for families (Delhi)
+
+> **New: clean air.** SafeRaah now also helps families breathe less polluted air. Every route is scored for the **PM2.5 you would breathe**, a **Cleanest air** route steers around busy roads, industrial estates and Delhi's landfills, the home screen shows the **live AQI** (Indian National AQI) with a 24-hour forecast, and **Saans**, a Gemini-powered assistant, turns the forecast and your family's situation into a plan for the day, indoor air fixes and greener swaps with their impact. See [Clean air](#clean-air-saans) below and [docs/11-clean-air.md](docs/11-clean-air.md).
 
 SafeRaah (सुरक्षित राह, "safe path") is our own map and router for India, covering **all of Delhi NCT** (all 11 districts including New Delhi, plus the bordering edges of Gurugram, Faridabad, Noida and Ghaziabad). For any trip — walking, scooty/bike, auto or car — it shows **up to four routes from the fastest to the safest**, coloured by real risk at that hour (🟥 high risk · 🔴 unsafe · 🟡 take care · 🟢 low risk), sends an **arrival message** to trusted contacts, checks on you if you stop on a risky street, and gives one-tap **SOS**.
 
@@ -31,6 +33,10 @@ Try a demo trip: `/?demo=1&from=77.24318,28.57009&to=77.22429,28.54259&t=21:30` 
 | Native | `android/`, `ios/`, `capacitor.config.ts` | Background location while the screen is locked; `NavStatusPlugin` (Android) shows the next turn as an ongoing notification / Android 16 Live Update and speaks turns with the phone's text-to-speech |
 | Nearby by kind | `shared/kinds.ts`, `web/src/browse.ts`, `pipeline/build_places.py` | "gym", "kirana", "chemist"… → nearest 5–7 of that kind with open state, or similar places; index of 26,000 mapped places with their precise type |
 | Guidance | `web/src/nav.ts` | Spoken turn-by-turn (in advance and at the turn, stretch warnings, re-route, arrival) and the navigation island |
+| Street air | `pipeline/build-air.ts`, `shared/air.ts` | Per street: distance to industrial land, busy roads and landfills (50 m raster + distance transform), named industrial areas; street pollution factor, PM2.5 dose by travel mode, Indian National AQI (CPCB) |
+| Clean-air routes | `shared/router.ts` | Extra search with cost T·(F/0.7)^1.5·(1+0.5·E·R); every route gets dose, % vs fastest, busy-road and industry metres, areas passed and avoided |
+| Live AQI | `web/src/airnow.ts`, `server/ai.ts` | CAMS forecast via Open-Meteo (no key), or Google Air Quality API on the server; position rounded to ~10 km |
+| Saans assistant | `shared/saans/`, `server/ai.ts`, `web/src/saans.ts` | Notes knowledge base in topic clusters, BM25 + Gemini-embedding hybrid search, facts computed in code, Gemini writes the answer and cites notes; built-in engine when there is no key or no network |
 
 Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-test-cases.md`, `docs/09-test-report.md`, user manual `docs/08-user-manual.md`, research `docs/research/`.
 
@@ -38,14 +44,30 @@ Design documents: `docs/01-blueprint.md`, `docs/02-requirements.md`, `docs/05-te
 
 ```bash
 npm run typecheck
-npm test               # 91 unit + API tests (vitest)
-npm run build && npm run test:e2e   # 20 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
+npm test               # 122 unit + API tests (vitest)
+npm run build && npm run test:e2e   # 24 end-to-end cases in headless Chrome (needs Python Playwright + Chrome)
 python3 tests/e2e/record_guides.py  # re-record the animated GIF manual into web/public/help/
 ```
 
+## Clean air (Saans)
+
+* **Live AQI card** on the home screen: Indian National AQI from PM2.5/PM10, the band's advice, and how many times above the WHO guideline the air is. Tap it to open Saans.
+* **Cleanest air route.** Air at street level is estimated from the city forecast × a street factor: busy road up to +60 %, beside one up to +25 %, industrial land up to +50 %, next to a landfill up to +60 %, parks −10 %. The dose is that × minutes × breathing rate for your way of travelling (walking breathes 1.4 m³/h; a closed car lets in ~60 %). The route with the lowest dose is labelled *Cleanest air* with "N% less PM2.5 breathed than fastest" and the industrial areas it avoids. When the fastest route is already the cleanest, the app says so instead of inventing a detour. If the cleanest route is less safe at night, the details say so.
+* **Air reports:** garbage burning, construction dust and heavy smoke can be reported like safety problems; clean-air routes avoid them until they expire (they don't change safety colours).
+* **Saans** (सांस, "breath"): a next-24-hours plan for *your* family (children, elders, asthma, pregnancy, cooking fuel, bedroom size, commute; kept only on the phone), purifier sizing, cooking smoke, masks, school runs, and swaps with CO₂ saved per month. Every number is computed in code; Gemini only explains it and cites the notes it used. Without a key it still answers from the built-in engine.
+
+Google services (all optional, set on the server only):
+
+| Variable | Used for |
+|---|---|
+| `GEMINI_API_KEY` | Saans answers (`GEMINI_MODEL`, default `gemini-flash-latest`) and note embeddings for vector search (`GEMINI_EMBED_MODEL`, default `gemini-embedding-001`) |
+| `GOOGLE_AIR_KEY` | Google Air Quality API current conditions (else CAMS via Open-Meteo) |
+
+Deploy to Cloud Run: `gcloud run deploy saferaah --source . --region asia-south1 --allow-unauthenticated --set-env-vars GEMINI_API_KEY=…` (the `Dockerfile` builds the app and serves it on port 8080). Then set `SAFERAAH_API_BASE` (repository variable) to the service URL and `ALLOWED_ORIGINS` on the service to your website's origin.
+
 ## Privacy
 
-Location stays on the phone. During a trip the server receives GPS points only for the live link and the arrival check, and deletes them, the route, destination and name the moment the trip ends; the optional two questions afterwards are stored as anonymous per-street votes. Details: [docs/10-privacy.md](docs/10-privacy.md).
+Location stays on the phone. The air reading is asked for a ~10 km cell, never your exact position; the family profile is stored only on the phone and Saans conversations only in memory (the server does not log questions). During a trip the server receives GPS points only for the live link and the arrival check, and deletes them, the route, destination and name the moment the trip ends; the optional two questions afterwards are stored as anonymous per-street votes. Details: [docs/10-privacy.md](docs/10-privacy.md).
 
 ## Website (GitHub Pages)
 
@@ -88,6 +110,7 @@ npm run build
 * OpenStreetMap is mapped less densely in outer and lower-income areas. Where few shops are mapped, "nothing open nearby" can partly mean "nothing mapped yet", which can make those areas score riskier than they are. Verified reviews correct this over time.
 * Footpaths come from map tiles, so a few may not connect perfectly to roads.
 * GPS-based review verification can be fooled by a determined spoofer; it stops casual abuse.
+* Air numbers are **estimates**: the forecast (CAMS) is coarse, and street factors are rounded from near-road and Delhi exposure studies, not measured on each street. Only three landfills are included; power plants and brick kilns are not mapped.
 * Live traffic needs a paid key: set `VITE_TOMTOM_KEY` at build time and a Traffic layer appears under Layers.
 * The hosted preview page cannot use GPS (its host does not grant location), so there you mark where you are on the map; the Android/iOS apps and the web app on your own domain (HTTPS) use real GPS. In the preview, live reports are kept in the page's shared store instead of the SafeRaah server.
 

@@ -16,6 +16,7 @@ gunzip -kf "$PACK/northern-zone.route.gz" "$PACK/northern-zone.search.gz"
 BBOX="76.83 28.40 77.35 28.89"   # Delhi NCT plus a small margin
 python3 -I pipeline/pack_to_geojson.py "$PACK" northern-zone data/raw/delhi-nct.geojson $BBOX
 NODE_OPTIONS=--max-old-space-size=8000 npx tsx pipeline/build-data.ts data/raw/delhi-nct.geojson web/public/data "Delhi NCT"
+NODE_OPTIONS=--max-old-space-size=6000 npx tsx pipeline/build-air.ts data/raw/delhi-nct.geojson web/public/data
 rm -rf web/public/data/tiles
 python3 -I pipeline/extract_tiles.py "$PACK/northern-zone.mbtiles" web/public/data/tiles $BBOX
 python3 -I pipeline/build_places.py "$PACK/northern-zone.search" web/public/data/version.json web/public/data/places.json

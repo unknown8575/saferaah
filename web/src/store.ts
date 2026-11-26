@@ -2,6 +2,7 @@
 // (private mode, blocked site data), so every access is guarded.
 import type { Mode } from '../../shared/modes.ts';
 import type { Profile } from '../../shared/risk.ts';
+import { DEFAULT_FAMILY, type Family } from '../../shared/saans/plan.ts';
 
 export interface Contact { id: string; name: string; phone: string; notify: boolean }
 export interface Settings {
@@ -15,11 +16,16 @@ export interface Settings {
   layers: { safety: boolean; reports: boolean; pois: boolean; traffic: boolean };
   /** spoken turn-by-turn guidance */
   voice: boolean;
+  /** who Saans plans for (kept on this phone only) */
+  family: Family;
+  /** user has set up the family profile */
+  familySet: boolean;
 }
 
 const KEY = 'saferaah.v1';
 const DEFAULTS: Settings = { profile: 'woman', mode: 'walk', contacts: [], travellerName: '', simulate: false, seenIntro: false,
-  layers: { safety: true, reports: true, pois: true, traffic: false }, voice: true };
+  layers: { safety: true, reports: true, pois: true, traffic: false }, voice: true,
+  family: DEFAULT_FAMILY, familySet: false };
 
 let mem: Settings | null = null;
 

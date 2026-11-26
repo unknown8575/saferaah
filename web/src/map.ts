@@ -396,11 +396,11 @@ export class SafeMap {
   }
 
   /** Live safety reports from other travellers. */
-  setReports(list: { id: string; lon: number; lat: number; icon: string; label: string; danger: boolean }[], onClick: (id: string, el: HTMLElement) => void) {
+  setReports(list: { id: string; lon: number; lat: number; icon: string; label: string; danger: boolean; air?: boolean }[], onClick: (id: string, el: HTMLElement) => void) {
     for (const m of this.reportMarkers) m.remove();
     this.reportMarkers = list.map((r) => {
       const el = document.createElement('button');
-      el.className = `report-pin${r.danger ? '' : ' good'}`;
+      el.className = `report-pin${r.air ? ' air' : r.danger ? '' : ' good'}`;
       el.appendChild(icon(r.icon, 16, 2.1));
       el.dataset.id = r.id;
       el.setAttribute('aria-label', `Live report: ${r.label}`);

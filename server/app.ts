@@ -11,6 +11,10 @@ import { REPORT_KINDS, isReportKind } from '../shared/live.ts';
 import { haversine } from '../shared/geo.ts';
 import type { LonLat } from '../shared/geo.ts';
 import { sendSms, smsConfigured } from './notify.ts';
+import { Ai } from './ai.ts';
+import { DEFAULT_FAMILY, TRAVEL_LABEL, type Family, type Travel } from '../shared/saans/plan.ts';
+import { naqi, type AirNow } from '../shared/air.ts';
+import type { AssistantContext, Turn } from '../shared/saans/assistant.ts';
 
 export interface AppOptions {
   db: DatabaseSync;
@@ -19,6 +23,36 @@ export interface AppOptions {
   /** ms clock, injectable for tests */
   now?: () => number;
   rateLimitPerMin?: number;
+  /** Gemini / Google Air Quality client (optional keys) */
+  ai?: Ai;
+}
+
+const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+
+/** Accept only the family fields we know, with sane ranges. */
+export function cleanFamily(f: any): Family {
+  const d = DEFAULT_FAMILY;
+  const c = f?.commute;
+  return {
+    adults: Math.round(num(f?.adults, 0, 12, d.adults)),
+    children: Math.round(num(f?.children, 0, 12, d.children)),
+    elders: Math.round(num(f?.elders, 0, 12, d.elders)),
+    asthma: f?.asthma === true,
+    pregnant: f?.pregnant === true,
+    cooking: ['lpg', 'induction', 'wood', 'kerosene'].includes(f?.cooking) ? f.cooking : d.cooking,
+    bedroomM2: Math.round(num(f?.bedroomM2, 4, 80, d.bedroomM2)),
+    commute: c && typeof c === 'object' && Object.hasOwn(TRAVEL_LABEL, c.mode)
+      ? { mode: c.mode as Travel, km: Math.round(num(c.km, 0.5, 80, 5) * 10) / 10 } : null,
+  };
+}
+/** Air reading sent by the app (it only shapes that user's own answer). */
+export function cleanAir(a: any): AirNow | null {
+  if (!a || typeof a.pm25 !== 'number' || !Number.isFinite(a.pm25)) return null;
+  const pm25 = num(a.pm25, 0, 1500, 0), pm10 = num(a.pm10, 0, 2000, pm25 * 1.6);
+  const hours = Array.isArray(a.hours) ? a.hours.slice(0, 48)
+    .filter((x: any) => typeof x?.time === 'string' && /^\d{4}-\d\d-\d\dT\d\d/.test(x.time) && typeof x.pm25 === 'number')
+    .map((x: any) => ({ time: x.time.slice(0, 16), pm25: num(x.pm25, 0, 1500, 0), pm10: num(x.pm10, 0, 2000, 0) })) : [];
+  return { at: String(a.at ?? '').slice(0, 25), pm25, pm10, aqi: naqi(pm25, pm10), hours, source: String(a.source ?? 'app').slice(0, 80) };
 }
 
 /**
@@ -71,6 +105,18 @@ export function createApp(opts: AppOptions): Server {
     if (!b || t > b.reset) { b = { n: 0, reset: t + 60000 }; buckets.set(key, b); }
     if (++b.n > limit) throw new HttpError(429, 'Too many requests, slow down');
     if (buckets.size > 10000) for (const [k, v] of buckets) if (t > v.reset) buckets.delete(k);
+  }
+
+  // the assistant costs money per call: 20 questions per 10 minutes per phone
+  const aiBuckets = new Map<string, number[]>();
+  function aiLimit(dev: string) {
+    const t = now();
+    const key = pseudo('ai', dev);
+    const xs = (aiBuckets.get(key) ?? []).filter((x) => t - x < 600000);
+    if (xs.length >= 20) throw new HttpError(429, 'Saans needs a short break. Try again in a few minutes.');
+    xs.push(t);
+    aiBuckets.set(key, xs);
+    if (aiBuckets.size > 5000) for (const [k, v] of aiBuckets) if (!v.some((x) => t - x < 600000)) aiBuckets.delete(k);
   }
 
   async function body(req: IncomingMessage): Promise<any> {
@@ -139,7 +185,45 @@ export function createApp(opts: AppOptions): Server {
   const routes: Record<string, (req: IncomingMessage, m: RegExpMatchArray) => Promise<unknown>> = {
     'GET /api/health': async () => ({
       ok: true, graphVersion: opts.graphVersion, sms: smsConfigured(),
+      gemini: !!opts.ai?.hasGemini, googleAir: !!opts.ai?.hasGoogleAir,
     }),
+
+    // Air now + next 24 h for a ~10 km cell. Nothing about the request is stored.
+    'GET /api/air': async (req) => {
+      const u = new URL(req.url ?? '/', 'http://x');
+      const lat = Number(u.searchParams.get('lat')), lon = Number(u.searchParams.get('lon'));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new HttpError(400, 'Invalid position');
+      if (!opts.ai) throw new HttpError(503, 'Air data not configured');
+      const v = await opts.ai.air(Math.round(lat * 10) / 10, Math.round(lon * 10) / 10);
+      if (!v) throw new HttpError(502, 'Air data unavailable');
+      return v;
+    },
+
+    // Saans assistant. Questions and answers are not logged or stored.
+    'POST /api/assistant': async (req) => {
+      const dev = device(req);
+      aiLimit(dev);
+      const b = await body(req);
+      const q = typeof b.q === 'string' ? b.q.trim().slice(0, 500) : '';
+      if (!q) throw new HttpError(400, 'Ask a question');
+      if (!opts.ai) throw new HttpError(503, 'Assistant not configured');
+      const route = b.ctx?.route;
+      const ctx: AssistantContext = {
+        air: cleanAir(b.ctx?.air),
+        family: cleanFamily(b.ctx?.family),
+        route: route && typeof route === 'object' ? {
+          mode: String(route.mode ?? '').slice(0, 20), minutes: Math.round(num(route.minutes, 0, 600, 0)),
+          label: String(route.label ?? 'Selected').slice(0, 30), pctLess: Math.round(num(route.pctLess, -100, 100, 0)),
+          avoided: (Array.isArray(route.avoided) ? route.avoided : []).slice(0, 4).map((x: unknown) => String(x).slice(0, 60)),
+          areas: (Array.isArray(route.areas) ? route.areas : []).slice(0, 4).map((x: unknown) => String(x).slice(0, 60)),
+        } : null,
+      };
+      const history: Turn[] = (Array.isArray(b.history) ? b.history : []).slice(-4)
+        .filter((t: any) => (t?.role === 'user' || t?.role === 'assistant') && typeof t.text === 'string')
+        .map((t: any) => ({ role: t.role, text: t.text.slice(0, 600) }));
+      const a = await opts.ai.answer(q, ctx, history);
+      return { text: a.text, notes: a.notes, cluster: a.cluster, plan: a.plan, engine: a.engine, model: a.model ?? null, fallback: a.fallback ?? false };
+    },
 
     'POST /api/journeys': async (req) => {
       const dev = device(req);

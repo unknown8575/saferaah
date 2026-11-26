@@ -7,7 +7,8 @@ import { buildSteps, type Step } from '../../shared/steps.ts';
 import { adviseTrip, type Advice } from '../../shared/advice.ts';
 import { MODES, type Mode } from '../../shared/modes.ts';
 import { routePrecautions, type Precautions } from '../../shared/precautions.ts';
-import { liveEdgeDeltas, type LiveReport } from '../../shared/live.ts';
+import { liveEdgeDeltas, airEdgeDeltas, type LiveReport } from '../../shared/live.ts';
+import { AirField, streetFactors } from '../../shared/air.ts';
 import type { LonLat } from '../../shared/geo.ts';
 
 let g: Graph, router: Router, pois: Poi[] = [];
@@ -15,6 +16,15 @@ const crowd = new Map<number, CrowdStat>();
 let live = new Map<number, number>();
 let liveVersion = 0;
 let riskCache: { key: string; field: RiskField } | null = null;
+let air: AirField | null = null;
+let airLive = new Map<number, number>();
+let airFactor: Float32Array | null = null;
+/** per-edge street pollution factor, rebuilt when air reports change */
+function airFactors(): Float32Array | null {
+  if (!air) return null;
+  airFactor ??= streetFactors(g, air, { live: airLive });
+  return airFactor;
+}
 
 export type WorkerRoute = Omit<RouteResult, 'edges'> & {
   edges: number[];
@@ -43,10 +53,13 @@ function riskFor(whenISO: string, profile: Profile): RiskField {
   return field;
 }
 
-function routeOnce(from: LonLat, to: LonLat, mode: Mode, whenISO: string, profile: Profile) {
+function routeOnce(from: LonLat, to: LonLat, mode: Mode, whenISO: string, profile: Profile, pm25?: number | null) {
   const when = new Date(whenISO);
   const risk = riskFor(whenISO, profile);
-  return router.route({ from, to, mode, when, ctx: { when, profile, pois, crowd, live } }, risk);
+  const factor = pm25 === undefined ? null : airFactors();
+  // without a live reading, doses are scored at a typical Delhi level; % differences don't depend on it
+  const airIn = factor && air ? { field: air, factor, pm25: pm25 ?? 100 } : undefined;
+  return router.route({ from, to, mode, when, ctx: { when, profile, pois, crowd, live }, air: airIn }, risk);
 }
 
 self.onmessage = async (ev: MessageEvent) => {
@@ -68,8 +81,13 @@ self.onmessage = async (ev: MessageEvent) => {
       ]);
       g = new Graph(gb);
       pois = pj;
+      // street air data is optional: without it the app still routes for safety
+      try {
+        const ab = await fetch(m.base + 'data/air.bin').then((r) => (r.ok ? r.arrayBuffer() : null));
+        air = ab ? new AirField(ab) : null;
+      } catch { air = null; }
       router = new Router(g);
-      postMessage({ type: 'ready', id: m.id, meta: { bbox: g.meta.bbox, snapshot: g.meta.snapshot, onewayKnown: g.meta.onewayKnown, nodes: g.n, edges: g.m } });
+      postMessage({ type: 'ready', id: m.id, meta: { bbox: g.meta.bbox, snapshot: g.meta.snapshot, onewayKnown: g.meta.onewayKnown, nodes: g.n, edges: g.m, air: !!air } });
       return;
     }
     if (m.type === 'crowd') {
@@ -80,7 +98,7 @@ self.onmessage = async (ev: MessageEvent) => {
       return;
     }
     if (m.type === 'route') {
-      const res = routeOnce(m.from, m.to, m.mode, m.when, m.profile);
+      const res = routeOnce(m.from, m.to, m.mode, m.when, m.profile, m.pm25 ?? null);
       let vehicleAlt: { mode: Mode; timeS: number; tier: RouteResult['tier'] } | undefined;
       if (m.mode === 'walk' && res.routes.length) {
         const alt = routeOnce(m.from, m.to, 'auto', m.when, m.profile);
@@ -111,6 +129,8 @@ self.onmessage = async (ev: MessageEvent) => {
     if (m.type === 'reports') {
       // live safety reports from other travellers change street risk until they expire
       live = liveEdgeDeltas(g, m.reports as LiveReport[], m.now ?? Date.now());
+      airLive = airEdgeDeltas(g, m.reports as LiveReport[], m.now ?? Date.now());
+      airFactor = null;
       liveVersion++;
       riskCache = null;
       postMessage({ type: 'ok', id: m.id, affected: live.size });

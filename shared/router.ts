@@ -8,6 +8,11 @@
 //
 // A* uses straight-line distance / top speed as heuristic. Since c_α ≥ T,
 // the heuristic stays admissible for every α, so each search is exact.
+//
+// Clean air: with an air field the router also searches
+//   c_air(e) = T(e) · (F(e) / 0.7)^1.5 · (1 + 0.5 · E_mode · R(e))
+// where F(e) is the street pollution factor (air.ts). Every route is then scored by
+// the PM2.5 dose breathed on it, and the lowest-dose one is labelled "Cleanest air".
 
 import { Graph } from './graph.ts';
 import { MODE_INFO, ROAD_CLASSES, F_FOOT, F_VEHICLE, F_ONEWAY, edgeSeconds, WALK_KMH, type Mode } from './modes.ts';
@@ -15,6 +20,7 @@ import { computeRisk, type RiskContext, type RiskField } from './risk.ts';
 import { CAT_INFO, type PoiCat } from './places.ts';
 import { isPeakIST, darkness } from './time.ts';
 import type { LonLat } from './geo.ts';
+import { doseUg, type AirField } from './air.ts';
 
 export const ALPHAS = [0, 0.5, 1.5, 5] as const;
 /** A slower route must lower mean risk at least this much to be shown. */
@@ -63,6 +69,33 @@ export interface RouteResult {
   dangerSpots: DangerSpot[];
   warnings: string[];
   labels: string[];
+  /** clean-air score, when the router has an air field */
+  air?: RouteAir;
+}
+
+export interface RouteAir {
+  /** PM2.5 breathed on this trip at the given background (µg) */
+  doseUg: number;
+  /** time-weighted street pollution factor (1 = city background) */
+  factor: number;
+  /** % less PM2.5 breathed than on the fastest route (negative = more) */
+  pctVsFastest: number;
+  /** metres within 300 m of industrial land or a landfill */
+  industryM: number;
+  /** metres on or right beside a busy road */
+  busyM: number;
+  /** named industrial areas / landfills passed */
+  areas: string[];
+  /** named areas the fastest route passes that this one avoids */
+  avoided: string[];
+}
+
+export interface AirInput {
+  field: AirField;
+  /** per-edge street factor (air.ts streetFactors) */
+  factor: Float32Array;
+  /** city background PM2.5 now, µg/m³ */
+  pm25: number;
 }
 
 export interface RouteRequest {
@@ -71,6 +104,7 @@ export interface RouteRequest {
   mode: Mode;
   when: Date;
   ctx: RiskContext;
+  air?: AirInput;
 }
 
 export interface RouteResponse {
@@ -388,6 +422,7 @@ export class Router {
     else fastest.labels.push('Also safest');
     for (const r of others) r.labels.push('Alternative');
     const routes = [...ranked, ...others];
+    if (req.air) this.addCleanAir(routes, req, s, t, times, risk, usable, fastestT);
     let note: string | undefined;
     if (ranked.length === 1) note = 'The fastest route is already the safest one here.';
     if (routes.length < 4) {
@@ -396,6 +431,46 @@ export class Router {
         : `Only ${routes.length} meaningfully different routes exist here.`);
     }
     return { ...base, routes, rankedCount: ranked.length, note, computeMs: performance.now() - t0 };
+  }
+
+  /** Find the lowest-PM2.5 route, score every route's dose and label the cleanest. */
+  private addCleanAir(routes: RouteResult[], req: RouteRequest, s: Snapped, t: Snapped, times: Float32Array,
+    risk: RiskField, usable: (e: number) => boolean, fastestT: number) {
+    const air = req.air!;
+    const exposure = MODE_INFO[req.mode].exposure;
+    const cost = new Float32Array(this.g.m);
+    for (let e = 0; e < this.g.m; e++) {
+      // ∝ the dose breathed (time × street factor), a little steeper so smoky peaks count;
+      // dividing by the lowest factor keeps c_air ≥ T, so the A* heuristic stays admissible
+      cost[e] = times[e] * Math.pow(air.factor[e] / 0.7, 1.5) * (1 + 0.5 * exposure * risk.risk[e]);
+    }
+    const r = this.astar(cost, req.mode, s, t, usable);
+    if (r) {
+      const twin = routes.find((k) => this.overlap(k.edges, r.edges) > 0.85);
+      if (!twin) {
+        const d = this.describe(-1, r.edges, s, t, times, risk, req, r.direct);
+        const minDose = Math.min(...routes.map((k) => k.air!.doseUg));
+        if (d.timeS <= Math.max(fastestT * MAX_DETOUR, fastestT + 300) && d.air!.doseUg < minDose * 0.97) {
+          d.labels = [];
+          // keep at most four routes: a plain alternative makes way for the cleaner one
+          if (routes.length >= 4) {
+            const alt = routes.findIndex((k) => k.labels.length === 1 && k.labels[0] === 'Alternative');
+            if (alt >= 0) routes.splice(alt, 1);
+          }
+          if (routes.length < 5) routes.push(d);
+        }
+      }
+    }
+    const fastest = routes.find((k) => k.labels.includes('Fastest')) ?? routes[0];
+    const base = fastest.air!.doseUg;
+    for (const k of routes) {
+      k.air!.pctVsFastest = base > 0 ? Math.round((1 - k.air!.doseUg / base) * 100) : 0;
+      const mine = new Set(k.air!.areas);
+      k.air!.avoided = fastest.air!.areas.filter((a) => !mine.has(a));
+    }
+    const cleanest = routes.reduce((a, b) => (b.air!.doseUg < a.air!.doseUg ? b : a));
+    if (cleanest !== fastest && cleanest.air!.pctVsFastest >= 3) cleanest.labels.push('Cleanest air');
+    else fastest.labels.push('Also cleanest');
   }
 
   private overlap(a: number[], b: number[]): number {
@@ -427,6 +502,9 @@ export class Router {
       return 1;
     };
     let T = 0, L = 0, RT = 0, main = 0, lit = 0, police = 0;
+    let AT = 0, indLen = 0, busyLen = 0;
+    const air = req.air;
+    const areaSet = new Map<string, number>();
     const havenSet = new Set<number>();
     const reasonsOf = (e: number): string[] => {
       const r: string[] = [];
@@ -456,6 +534,13 @@ export class Router {
       if (g.a.edgePoliceM[e] < 500) police += len;
       for (const p of g.edgePois(e)) if (risk.poiOpen[p]) havenSet.add(p);
       perEdge.push({ e, len, r: risk.risk[e] });
+      if (air) {
+        AT += tm * air.factor[e];
+        if (air.field.indM(e) <= 300 || air.field.dumpM(e) <= 800) indLen += len;
+        if (air.field.majM(e) <= 30) busyLen += len;
+        const nm = air.field.areaName(e);
+        if (nm) areaSet.set(nm, (areaSet.get(nm) ?? 0) + len);
+      }
     });
     // worst ~200 m stretch (sliding window by length)
     let worst = 0, wl = 0, wr = 0, lo = 0;
@@ -510,6 +595,15 @@ export class Router {
       worstStretch: worst, tier: tierOf(meanRisk, worst), havens, havenIds: [...havenSet],
       mainRoadShare: L ? main / L : 0, litShare: L ? lit / L : 0, policeShare: L ? police / L : 0,
       dangerSpots, warnings, labels: [],
+      air: air ? {
+        doseUg: doseUg(air.pm25, T > 0 ? AT / T : 1, T, req.mode),
+        factor: T > 0 ? AT / T : 1,
+        pctVsFastest: 0,
+        industryM: Math.round(indLen), busyM: Math.round(busyLen),
+        // only areas the route really runs beside, longest first
+        areas: [...areaSet].filter(([, m]) => m >= 150).sort((a, b) => b[1] - a[1]).map(([n]) => n).slice(0, 4),
+        avoided: [],
+      } : undefined,
     };
   }
 }

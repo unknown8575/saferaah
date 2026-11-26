@@ -54,6 +54,12 @@
 | FR-29 | Spoken turn-by-turn guidance (English) with mute; a navigation island showing next turn, distance and ETA; in the Android app an ongoing navigation notification promoted to an Android 16 Live Update. |
 | FR-30 | Privacy: location stays on the phone; trip GPS points, route, destination and name are deleted when the trip ends; after-trip questions (2, optional) are anonymous per-street votes; reports and leftovers are purged on schedule; user can wipe all data on the phone. |
 | FR-31 | Search by kind of place (gym, grocery/kirana, chemist, salon, café, ATM…, English and common Hinglish): show the nearest 5–7 with open state; if that kind is not mapped nearby, show similar places; all on the map on Enter; also in the start/destination fields. |
+| FR-32 | Show the live air quality where the user is: Indian National AQI (CPCB) from PM2.5/PM10, band, advice and × WHO guideline, with a 24-hour forecast; ask for a ~10 km cell only. |
+| FR-33 | Score every route for the PM2.5 breathed (city level × street factor × travel mode); label the lowest-dose route "Cleanest air" with % less than the fastest and the industrial areas/landfills it avoids; say so when the fastest is also cleanest. |
+| FR-34 | Warn honestly when the cleanest-air route is less safe at the chosen time. |
+| FR-35 | Let travellers report garbage burning, construction dust and heavy smoke; clean-air routes avoid them until they expire; they do not change safety colours. |
+| FR-36 | Saans assistant: next-24-hours plan for the family (children, elders, asthma, pregnancy, cooking fuel, bedroom size, commute), indoor tips, swaps with computed impact; answers cite their sources. |
+| FR-37 | Saans uses Gemini on the server when a key is set (grounded on computed facts and retrieved notes, hybrid keyword + vector search) and a built-in engine otherwise or offline; keys never reach the app; 20 questions / 10 min per phone; questions are not stored. |
 
 ## 3. Non-functional requirements
 | ID | Requirement |

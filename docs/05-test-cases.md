@@ -144,4 +144,12 @@ Each case is automated. **U** = unit test (vitest, `tests/unit`), **A** = API te
 | TC-142 | U edge | A rare kind (swimming pool) | similar places fill the list, after any exact ones | FR-31 |
 | TC-143 | U normal | Labels and categories for kinds | friendly names; unknown kinds readable | FR-31 |
 | TC-144 | E normal | Type "gym" with GPS at CP; open one; "kirana" + Enter; "chemist" in the destination field | 5–7 rows with open pills; place card says Gym; map list of grocery stores with ≥5 pins; route to a medical store | FR-31 |
-
+| TC-145 | E normal | Home with GPS at CP (air forecast mocked); open Saans; ask about a purifier | AQI card shows a number; forecast bars ≥ 20; plan ≥ 3 steps; answer has m³/h and a citation; Esc closes | FR-32, FR-36 |
+| TC-146 | E normal | Set up family: 1 child, asthma, car commute | strip shows "1 child · asthma"; plan shows kg CO₂ saved; saved in local storage | FR-36 |
+| TC-147 | E normal | Mayapuri → Janakpuri by auto; open details | every card has an air line; a Cleanest air label or the "also cleanest" note; details show "Air on this route" | FR-33 |
+| TC-148 | E normal | Report sheet | three air kinds in their own group; reporting burning confirms clean-air routes avoid it | FR-35 |
+| TC-150–154 | U normal/edge | CPCB breakpoints, PM10 vs PM2.5, forecast parsing, cleanest window, broken responses | exact band values; null on bad data | FR-32 |
+| TC-155–157 | U normal | air.bin round trip; Wazirpur/Ghazipur streets vs quiet streets; dose maths | factors in range; industrial > 1.2, landfill > 1.3 | FR-33 |
+| TC-158–161 | U normal | Clean-air routing on real trips; burning report; air kinds | one cleanest label; cleanest has the lowest dose; burning raises dose but not risk | FR-33, FR-35 |
+| TC-170–182 | U normal | Notes, Hinglish tokens, retrieval, hybrid scores, CADR, CO₂ swaps, day plan, intents, answers, prompt, output tidy | right notes per question; different specific answers; prompt has facts and rules | FR-36, FR-37 |
+| TC-190–195 | A normal/abuse | /api/health, /api/air, /api/assistant with fake Google services; no key; Gemini failure; empty question; 21 questions; bad family/air input | keys only in headers; position rounded; fallback engine; 400/429; values clamped | FR-32, FR-37 |

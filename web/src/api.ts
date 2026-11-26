@@ -12,6 +12,7 @@ const url = (path: string) => (API_BASE ? `${API_BASE}/${path}` : path);
 
 let online: boolean | null = null;
 let smsOnServer = false;
+let geminiOnServer = false;
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const r = await fetch(url(path), {
@@ -33,6 +34,7 @@ export async function checkServer(): Promise<boolean> {
     const d = r.ok ? await r.json() : null;
     online = !!d?.ok;
     smsOnServer = !!d?.sms;
+    geminiOnServer = !!d?.gemini;
   } catch {
     online = false;
   }
@@ -40,6 +42,7 @@ export async function checkServer(): Promise<boolean> {
 }
 export const isOnline = () => online === true;
 export const serverSms = () => smsOnServer;
+export const serverGemini = () => geminiOnServer;
 
 export interface JourneyHandle { id: string; token: string; shareId: string }
 
@@ -57,6 +60,8 @@ export const api = {
     call<{ ok: boolean; smsSent: number }>('POST', `api/journeys/${j.id}/notify`, { token: j.token, contacts, message }),
   review: (journeyId: string, reviewToken: string, rating: number, tags: string[]) =>
     call<{ ok: boolean }>('POST', 'api/reviews', { journeyId, reviewToken, rating, tags }),
+  assistant: (b: { q: string; ctx: unknown; history: { role: string; text: string }[] }) =>
+    call<{ text: string; notes: { n: number; id: string; title: string; source: string }[]; engine: 'gemini' | 'saans'; model: string | null; fallback: boolean }>('POST', 'api/assistant', b),
   share: (shareId: string) => call<any>('GET', `api/share/${encodeURIComponent(shareId)}`),
   reroute: (j: JourneyHandle, route: LonLat[], edges: number[], etaS: number) =>
     call<{ ok: boolean }>('POST', `api/journeys/${j.id}/route`, { token: j.token, route, edges, etaS }),

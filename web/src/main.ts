@@ -14,7 +14,11 @@ import { TIER_INFO, tierOf, type Tier } from '../../shared/router.ts';
 import { CAT_INFO, isOpenAt, type Poi, type PoiCat } from '../../shared/places.ts';
 import { MODE_INFO, MODES, WALK_KMH, type Mode } from '../../shared/modes.ts';
 import { JourneyMonitor, type Fix, type JourneyEvent } from '../../shared/journey.ts';
-import { REPORT_KINDS, type LiveReport, type ReportKind } from '../../shared/live.ts';
+import { REPORT_KINDS, isAirReport, type LiveReport, type ReportKind } from '../../shared/live.ts';
+import { AQI_BANDS, type AirNow } from '../../shared/air.ts';
+import { airAt } from './airnow.ts';
+import { openSaans } from './saans.ts';
+import type { RouteSummary } from '../../shared/saans/assistant.ts';
 import { darkness, istTime, IST_OFFSET_MIN } from '../../shared/time.ts';
 import { haversine, type LonLat } from '../../shared/geo.ts';
 import type { Profile } from '../../shared/risk.ts';
@@ -75,6 +79,8 @@ const S = {
   pois: [] as Poi[],
   reports: [] as LiveReport[],
   reportsAt: 0,
+  air: null as AirNow | null,
+  airFor: '' as string,
   journey: null as null | {
     route: WorkerRoute; monitor: JourneyMonitor; source: PositionSource; handle: JourneyHandle | null; pref: Pref;
     pendingFixes: Fix[]; dest: Place; startedAt: number; clock: () => number; offRoute: boolean;
@@ -220,6 +226,8 @@ async function boot() {
   startLocating();
   setInterval(() => { refreshPois(); applyTheme(); if (S.view === 'home') renderHome(); }, 60000);
   setInterval(() => refreshReports(), 60000);
+  setTimeout(() => refreshAir(), 1200);
+  setInterval(() => refreshAir(), 30 * 60000);
   setTimeout(() => loadPlaces(BASE), 2500); // nearby-places index for "gym near me" searches
   if (S.to) { openDirections(); return; }
   goHome();
@@ -270,6 +278,7 @@ function startLocating() {
     if (first) {
       const me = myLonLat();
       if (me && S.view === 'home' && !S.follow) smap.map.easeTo({ center: me, zoom: Math.max(smap.map.getZoom(), 15), duration: 800 });
+      if (me && !S.airFor) { S.airFor = 'gps'; refreshAir(); }
       if (S.view === 'home') renderHome();
       renderFabs();
       if (S.view === 'directions' && !S.from && !S.reply) planRoutes();
@@ -571,6 +580,7 @@ function renderHome() {
       h('div', { class: 'now-row' },
         h('span', { class: `now-pill ${d >= 0.5 ? 'night' : 'day'}` }, icon(d >= 0.5 ? 'moon' : 'sun', 15), clockText(now())),
         h('span', { class: 'now-text' }, d >= 0.5 ? 'After dark: we weigh lighting, open places and busy streets more.' : 'Daytime: most busy streets are low risk.')),
+      aqiCard(),
       nearReports ? h('p', { class: 'live-line' }, h('span', { class: 'live-dot' }), `${nearReports} live safety report${nearReports > 1 ? 's' : ''} near you`) : null,
       h('p', { class: 'hint' }, 'Search a place, tap anywhere on the map, or pick a category above. Then tap ', h('b', null, 'Directions'), '.'),
       h('div', { class: 'quick' },
@@ -578,6 +588,18 @@ function renderHome() {
         h('button', { class: 'btn', on: { click: () => showContacts() } }, icon('contacts', 18), 'Trusted contacts')),
     ),
   );
+}
+
+function aqiCard(): HTMLElement {
+  const a = S.air;
+  const B = a ? AQI_BANDS[a.aqi.band] : null;
+  return h('button', { class: 'aqi-card', id: 'aqi-card', style: B ? { '--band': B.color } : {}, on: { click: () => askSaans() },
+    'aria-label': a ? `Air quality ${a.aqi.value}, ${B!.label}. Open Saans, the clean-air assistant` : 'Open Saans, the clean-air assistant' },
+    h('span', { class: 'aqi-ring' }, a ? String(a.aqi.value) : '–'),
+    h('span', { class: 'aqi-txt' },
+      h('b', null, a ? `${B!.label} air` : 'Air quality'),
+      h('small', null, a ? `PM2.5 ${Math.round(a.pm25)} µg/m³ · ${(a.pm25 / 15).toFixed(0)}× WHO` : 'Checking the air near you…')),
+    h('span', { class: 'aqi-ask' }, icon('sparkle', 15), 'Ask Saans'));
 }
 
 // ---------- place card ----------
@@ -871,7 +893,7 @@ async function planRoutes(opts: { quiet?: boolean } = {}) {
     .then((r) => { if (seq === planSeq && (S.view === 'directions' || S.view === 'details')) { S.modeTimes = r.times; updateModeTimes(); } }).catch(() => {});
   let reply: RouteReply;
   try {
-    reply = (await rpc<{ reply: RouteReply }>({ type: 'route', from, to, mode: S.settings.mode, when, profile: S.settings.profile })).reply;
+    reply = (await rpc<{ reply: RouteReply }>({ type: 'route', from, to, mode: S.settings.mode, when, profile: S.settings.profile, pm25: S.air?.pm25 ?? null })).reply;
   } catch (err) {
     if (seq !== planSeq) return;
     S.reply = null;
@@ -945,18 +967,75 @@ function renderRoutes() {
           h('span', { class: 'rc-top' },
             h('span', { class: 'rc-time' }, fmtDuration(r.timeS)),
             h('span', { class: 'rc-sub' }, fmtDist(r.lengthM)),
-            r.labels.filter((l) => l !== 'Also safest' && l !== 'Alternative').map((l) => h('span', { class: `lbl lbl-${l.toLowerCase()}` }, l)),
+            r.labels.filter((l) => l !== 'Also safest' && l !== 'Alternative' && l !== 'Also cleanest').map((l) => h('span', { class: `lbl lbl-${l.toLowerCase().replace(/\s+/g, '-')}` }, l === 'Cleanest air' ? [icon('leaf', 12), l] : l)),
             h('span', { class: 'rc-badge' }, tierBadge(r))),
           h('span', { class: `rc-prec prec-${r.tier}` }, icon(r.tier === 'green' ? 'police' : 'alert', 15), r.precautions.headline),
+          airLine(r),
           on && r.precautions.items.length && r.tier !== 'green'
             ? h('span', { class: 'rc-items' }, r.precautions.items.slice(0, 2).map((t) => h('span', null, '• ', t))) : null)));
       })),
     R.note ? h('p', { class: 'note' }, R.note) : null,
+    R.routes.some((x) => x.labels.includes('Also cleanest')) && R.routes.length > 1
+      ? h('p', { class: 'note air-note' }, icon('leaf', 14), 'The fastest route is also the cleanest air here: less time outside beats a detour.') : null,
     vehicleNote ? h('p', { class: 'note' }, 'One-way streets are not in this map yet. Follow road signs.') : null,
     sel ? h('div', { class: 'actions sticky' },
       h('button', { class: 'btn', id: 'details-btn', on: { click: () => showDetails() } }, 'Precautions'),
       h('button', { class: 'btn primary', id: 'start', on: { click: () => startJourney() } }, icon('navigate', 18), 'Start')) : null,
   );
+}
+
+/** One line on a route card: how much PM2.5 this route means compared with the fastest. */
+function airLine(r: WorkerRoute): HTMLElement | null {
+  const a = r.air;
+  if (!a) return null;
+  const isFastest = r.labels.includes('Fastest');
+  const txt = isFastest
+    ? (a.areas.length ? `Air: passes ${a.areas[0]}` : `Air: ${a.factor >= 1.35 ? 'busy-road air' : a.factor >= 1.15 ? 'some traffic air' : 'mostly quiet streets'}`)
+    : a.pctVsFastest >= 3 ? `${a.pctVsFastest}% less PM2.5 breathed than fastest`
+      : a.pctVsFastest <= -3 ? `${-a.pctVsFastest}% more PM2.5 breathed than fastest` : 'About the same air as fastest';
+  return h('span', { class: `rc-air${!isFastest && a.pctVsFastest >= 3 ? ' better' : ''}` }, icon('wind', 14), txt);
+}
+
+function airSection(r: WorkerRoute): HTMLElement[] | null {
+  const a = r.air;
+  if (!a) return null;
+  const R = S.reply!;
+  const fastest = R.routes.find((x) => x.labels.includes('Fastest'));
+  const cleanest = R.routes.find((x) => x.labels.includes('Cleanest air'));
+  const pm = S.air ? Math.round(S.air.pm25) : null;
+  const items: (HTMLElement | null)[] = [
+    pm != null ? h('li', null, h('b', null, `≈${Math.round(a.doseUg)} µg`), ` of PM2.5 breathed on this trip (city air now ${pm} µg/m³)`) : null,
+    r !== fastest && a.pctVsFastest !== 0 ? h('li', null, h('b', null, `${Math.abs(a.pctVsFastest)}% ${a.pctVsFastest > 0 ? 'less' : 'more'}`), ' than on the fastest route') : null,
+    h('li', null, h('b', null, fmtDist(a.busyM)), ' on or beside busy roads'),
+    a.industryM > 50 ? h('li', null, h('b', null, fmtDist(a.industryM)), ' near industrial land or a landfill') : null,
+    a.areas.length ? h('li', null, 'Passes ', a.areas.join(', ')) : null,
+    a.avoided.length ? h('li', { class: 'good' }, 'Avoids ', a.avoided.join(', ')) : null,
+  ];
+  // honest trade-off: cleaner air through a park or a quiet lane can be the less safe choice at night
+  const tradeoff = r === cleanest && fastest && TIER_RANK[r.tier] > TIER_RANK[fastest.tier]
+    ? h('p', { class: 'tradeoff' }, icon('alert', 15), `Cleaner air, but ${TIER_INFO[r.tier].label.toLowerCase()} for safety at ${clockText(now())}. After dark the safer route may be the better choice.`) : null;
+  return [h('h3', null, 'Air on this route'), h('ul', { class: 'facts' }, items), tradeoff ?? null,
+    h('p', { class: 'fine' }, 'Estimates: the city forecast (CAMS) plus street-level effects of traffic, industry and landfills.')].filter(Boolean) as HTMLElement[];
+}
+
+/** What Saans needs to know about the selected route. */
+function routeSummary(): RouteSummary | null {
+  const r = S.reply?.routes[S.selected];
+  if (!r?.air || !['directions', 'details'].includes(S.view)) return null;
+  return { mode: MODE_INFO[S.settings.mode].label.toLowerCase(), minutes: Math.round(r.timeS / 60), label: r.labels[0] ?? 'Selected',
+    pctLess: r.air.pctVsFastest, avoided: r.air.avoided, areas: r.air.areas };
+}
+
+/** Live air for where the user is (or the map centre), refreshed every 30 min. */
+async function refreshAir(): Promise<AirNow | null> {
+  const p = myLonLat() ?? (smap ? [smap.map.getCenter().lng, smap.map.getCenter().lat] as LonLat : null);
+  if (!p) return S.air;
+  const v = await airAt(p, { server: isOnline() });
+  if (v) { S.air = v; if (S.view === 'home') renderHome(); }
+  return S.air;
+}
+function askSaans(ask?: string) {
+  openSaans({ air: refreshAir, route: routeSummary, online: () => isOnline() }, { ask });
 }
 
 function havenLine(r: WorkerRoute): string {
@@ -996,6 +1075,7 @@ function showDetails() {
         h('li', null, h('b', null, pct(r.policeShare)), ' within 500 m of a police station'),
         h('li', null, h('b', null, String(r.havenIds.length)), ` places open along the way at ${clockText(now())}`),
         h('li', null, havenLine(r))),
+      airSection(r),
       r.dangerSpots.length ? [h('h3', null, 'Risky stretches'), h('ul', { class: 'spots' }, r.dangerSpots.map((d) =>
         h('li', null, h('button', { class: 'linkish', on: { click: () => smap.map.flyTo({ center: [d.lon, d.lat], zoom: 16.5 }) } },
           h('span', { class: 'warn-ic' }, '!'), `${fmtDist(d.lengthM)}${d.street ? ' on ' + d.street : ''}: ${d.reasons.join(', ') || 'quiet at this hour'}`))))] : null,
@@ -1045,7 +1125,7 @@ async function refreshReports(force = false) {
 
 function drawReports() {
   const list = S.settings.layers.reports ? S.reports : [];
-  smap.setReports(list.map((r) => ({ id: r.id, lon: r.lon, lat: r.lat, icon: REPORT_ICON[r.kind] ?? 'alert', label: REPORT_KINDS[r.kind]?.label ?? r.kind, danger: REPORT_KINDS[r.kind]?.danger ?? true })),
+  smap.setReports(list.map((r) => ({ id: r.id, lon: r.lon, lat: r.lat, icon: REPORT_ICON[r.kind] ?? 'alert', label: REPORT_KINDS[r.kind]?.label ?? r.kind, danger: REPORT_KINDS[r.kind]?.danger ?? true, air: REPORT_KINDS[r.kind] ? isAirReport(r.kind) : false })),
     (id) => openReportPopup(id));
 }
 
@@ -1089,16 +1169,19 @@ function openReport() {
     try {
       const r = await live.report(kind, me, { lon: me[0], lat: me[1], acc: S.journey ? S.myPos!.acc : myAcc() });
       closeModal();
-      toast(r.merged ? 'Thanks. Someone reported this too, so it now counts more.' : `Thanks. Others will see this for about ${REPORT_KINDS[kind].hours} h, and routes will avoid it.`, 5000);
+      toast(r.merged ? 'Thanks. Someone reported this too, so it now counts more.' : `Thanks. Others will see this for about ${REPORT_KINDS[kind].hours} h, and ${isAirReport(kind) ? 'clean-air routes' : 'routes'} will avoid it.`, 5000);
       refreshReports(true);
     } catch (err) { toast((err as Error).message, 5000); }
   };
+  const kindBtn = (k: ReportKind) => h('button', { class: `report-kind${isAirReport(k) ? ' air' : REPORT_KINDS[k].danger ? '' : ' good'}`, 'data-kind': k, on: { click: () => send(k) } },
+    h('span', { class: 'rk-ic' }, icon(REPORT_ICON[k], 24)), REPORT_KINDS[k].label);
   openModal(h('div', { class: 'modal-card' },
     h('h2', null, 'What is happening here?'),
     h('p', { class: 'fine' }, 'Your report is anonymous and expires in a few hours. Routes for everyone avoid this spot until then.'),
-    h('div', { class: 'report-grid' }, (Object.keys(REPORT_KINDS) as ReportKind[]).map((k) =>
-      h('button', { class: `report-kind${REPORT_KINDS[k].danger ? '' : ' good'}`, 'data-kind': k, on: { click: () => send(k) } },
-        h('span', { class: 'rk-ic' }, icon(REPORT_ICON[k], 24)), REPORT_KINDS[k].label))),
+    h('h3', { class: 'rk-group' }, 'Safety'),
+    h('div', { class: 'report-grid' }, (Object.keys(REPORT_KINDS) as ReportKind[]).filter((k) => !isAirReport(k)).map((k) => kindBtn(k))),
+    h('h3', { class: 'rk-group' }, 'Air'),
+    h('div', { class: 'report-grid' }, (Object.keys(REPORT_KINDS) as ReportKind[]).filter((k) => isAirReport(k)).map((k) => kindBtn(k))),
     h('p', { class: 'fine' }, 'In danger right now? Use SOS or call 112.'),
     h('button', { class: 'btn ghost wide', on: { click: () => closeModal() } }, 'Cancel')));
 }
@@ -1126,6 +1209,7 @@ function openLayers() {
 function openMenu() {
   openModal(h('div', { class: 'modal-card menu' },
     h('div', { class: 'brand' }, h('span', { class: 'logo', 'aria-hidden': 'true' }), 'SafeRaah'),
+    h('button', { class: 'menu-row', id: 'menu-saans', on: { click: () => { closeModal(); askSaans(); } } }, h('span', { class: 'mi' }, icon('sparkle', 18)), 'Saans: clean-air assistant'),
     h('button', { class: 'menu-row', on: { click: () => { closeModal(); showCategory('safe'); } } }, h('span', { class: 'mi' }, icon('police', 18)), 'Safe places near me'),
     h('button', { class: 'menu-row', on: { click: () => { closeModal(); showContacts(); } } }, h('span', { class: 'mi' }, icon('contacts', 18)), 'Trusted contacts & settings'),
     h('button', { class: 'menu-row', on: { click: () => { closeModal(); openLayers(); } } }, h('span', { class: 'mi' }, icon('layers', 18)), 'Map layers'),
@@ -1632,7 +1716,7 @@ function showContacts() {
         h('li', null, 'Contacts and settings are kept only on this phone.')),
       h('button', { class: 'btn ghost wide', id: 'wipe', on: { click: () => {
         openModal(h('div', { class: 'modal-card' }, h('h2', null, 'Delete everything on this phone?'),
-          h('p', null, 'Removes your contacts, name and settings from SafeRaah on this phone.'),
+          h('p', null, 'Removes your contacts, name, family profile and settings from SafeRaah on this phone.'),
           h('div', { class: 'row2' }, h('button', { class: 'btn ghost', on: { click: () => closeModal() } }, 'Cancel'),
             h('button', { class: 'btn danger', id: 'wipe-ok', on: { click: () => {
               try { for (const k of Object.keys(localStorage)) if (k.startsWith('saferaah')) localStorage.removeItem(k); } catch { /* storage blocked */ }

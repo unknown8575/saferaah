@@ -1,0 +1,9 @@
+node_modules
+web/dist
+android
+ios
+data
+docs
+tests
+.git
+*.log
