@@ -62,7 +62,10 @@ Google services (all optional, set on the server only):
 |---|---|
 | `GEMINI_API_KEY` | Saans answers (`GEMINI_MODEL`, default `gemini-flash-latest`) and note embeddings for vector search (`GEMINI_EMBED_MODEL`, default `gemini-embedding-001`) |
 | `GOOGLE_AIR_KEY` | Google Air Quality API current conditions (else CAMS via Open-Meteo) |
+| `GEMINI_VERTEX=1` | Use Gemini on Vertex AI with the Cloud Run service account instead of a key (needs the Vertex AI API and the `roles/aiplatform.user` role); billed to the project |
 | `GEMINI_DAILY_LIMIT` | Most Gemini answers per day for the whole server (default 500); after that the built-in engine answers |
+
+Limits on Saans: 20 questions per 10 minutes per phone, 60 per hour per network address (the address Google's front end reports, so it can't be faked), and the daily cap above; Cloud Run runs at most 2 instances. Keys live only in the service's environment, never in this repository.
 
 Deploy to Cloud Run: `gcloud run deploy saferaah --source . --region asia-south1 --allow-unauthenticated --set-env-vars GEMINI_API_KEY=…` (the `Dockerfile` builds the app and serves it on port 8080). The website uses the server at `https://saferaah-87901400101.asia-south1.run.app` (set in `.github/workflows/pages.yml`; the repository variable `SAFERAAH_API_BASE` overrides it) and `ALLOWED_ORIGINS` on the service to your website's origin.
 

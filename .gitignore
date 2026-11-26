@@ -10,3 +10,6 @@ ios/DerivedData/
 data/pack/
 data/raw/*.geojson
 __pycache__/
+.env
+.env.*
+*.key

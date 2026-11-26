@@ -25,6 +25,8 @@ export interface AppOptions {
   rateLimitPerMin?: number;
   /** Gemini / Google Air Quality client (optional keys) */
   ai?: Ai;
+  /** behind a trusted proxy (Cloud Run): take the client address from X-Forwarded-For */
+  trustProxy?: boolean;
 }
 
 const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
@@ -107,16 +109,33 @@ export function createApp(opts: AppOptions): Server {
     if (buckets.size > 10000) for (const [k, v] of buckets) if (t > v.reset) buckets.delete(k);
   }
 
-  // the assistant costs money per call: 20 questions per 10 minutes per phone
+  /**
+   * The caller's address. On Cloud Run every request arrives from Google's front end, which
+   * appends the real client address as the LAST X-Forwarded-For entry (earlier entries can be
+   * forged by the caller, so they are ignored).
+   */
+  function clientIp(req: IncomingMessage): string {
+    if (opts.trustProxy) {
+      const xff = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      if (xff.length) return xff[xff.length - 1];
+    }
+    return req.socket.remoteAddress ?? '?';
+  }
+
+  // the assistant costs money per call: per phone 20 questions / 10 min, per network address
+  // 60 / hour (so a new phone id each time does not get around it); a daily cap sits in Ai
   const aiBuckets = new Map<string, number[]>();
-  function aiLimit(dev: string) {
+  function hit(key: string, max: number, windowMs: number, msg: string) {
     const t = now();
-    const key = pseudo('ai', dev);
-    const xs = (aiBuckets.get(key) ?? []).filter((x) => t - x < 600000);
-    if (xs.length >= 20) throw new HttpError(429, 'Saans needs a short break. Try again in a few minutes.');
+    const xs = (aiBuckets.get(key) ?? []).filter((x) => t - x < windowMs);
+    if (xs.length >= max) throw new HttpError(429, msg);
     xs.push(t);
     aiBuckets.set(key, xs);
-    if (aiBuckets.size > 5000) for (const [k, v] of aiBuckets) if (!v.some((x) => t - x < 600000)) aiBuckets.delete(k);
+    if (aiBuckets.size > 5000) for (const [k, v] of aiBuckets) if (!v.some((x) => t - x < 3600000)) aiBuckets.delete(k);
+  }
+  function aiLimit(dev: string, ip: string) {
+    hit('d:' + pseudo('ai', dev), 20, 600000, 'Saans needs a short break. Try again in a few minutes.');
+    hit('i:' + pseudo('ai-ip', ip), 60, 3600000, 'Too many questions from this network. Try again in an hour.');
   }
 
   async function body(req: IncomingMessage): Promise<any> {
@@ -202,7 +221,7 @@ export function createApp(opts: AppOptions): Server {
     // Saans assistant. Questions and answers are not logged or stored.
     'POST /api/assistant': async (req) => {
       const dev = device(req);
-      aiLimit(dev);
+      aiLimit(dev, clientIp(req));
       const b = await body(req);
       const q = typeof b.q === 'string' ? b.q.trim().slice(0, 500) : '';
       if (!q) throw new HttpError(400, 'Ask a question');
@@ -477,7 +496,7 @@ export function createApp(opts: AppOptions): Server {
     }
     try {
       if (path.startsWith('/api/')) {
-        rateLimit('ip:' + (req.socket.remoteAddress ?? '?'));
+        rateLimit('ip:' + clientIp(req));
         const route = compiled.find((r) => r.method === req.method && r.re.test(path));
         if (!route) throw new HttpError(404, 'No such endpoint');
         const out = await route.fn(req, path.match(route.re)!);

@@ -18,5 +18,6 @@ try {
   console.warn('graph.bin not found in', staticDir, '— run `npm run build` first');
 }
 const ai = new Ai(aiConfigFromEnv());
-const server = createApp({ db: openDb(dbPath), staticDir, graphVersion, ai });
+// Cloud Run sets K_SERVICE; there the real client address comes from Google's front end
+const server = createApp({ db: openDb(dbPath), staticDir, graphVersion, ai, trustProxy: !!process.env.K_SERVICE || process.env.TRUST_PROXY === '1' });
 server.listen(port, () => console.log(`SafeRaah running on http://localhost:${port}  (graph ${graphVersion}; Gemini ${ai.hasGemini ? 'on' : 'off'})`));

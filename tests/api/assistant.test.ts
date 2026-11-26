@@ -162,4 +162,19 @@ describe('Saans API', () => {
     expect(seen.filter((u) => u.includes(':generateContent'))[0]).toContain('gemini-3.8-flash');
     expect(seen.filter((u) => u.includes('/token'))).toHaveLength(0); // token cached
   });
+  it('TC-198 behind Cloud Run, the per-network limit uses the address Google appends, not a forged one', async () => {
+    const app = createApp({ db: openDb(':memory:'), graphVersion: 'test', ai: new Ai({ fetch: fakeFetch }), trustProxy: true });
+    await new Promise<void>((r) => app.listen(0, '127.0.0.1', r));
+    const b = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
+    const ask = (dev: string, xff: string) => fetch(b + '/api/assistant', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-device-id': dev, 'x-forwarded-for': xff },
+      body: JSON.stringify({ q: 'mask?', ctx }),
+    }).then((r) => r.status);
+    let last = 0;
+    // a new phone id and a forged first address every time: still one network
+    for (let i = 0; i < 61; i++) last = await ask(`device-rotating-${String(i).padStart(6, '0')}`, `10.0.0.${i}, 203.0.113.7`);
+    expect(last).toBe(429);
+    expect(await ask('device-other-network-01', '198.51.100.9')).toBe(200);
+    app.close();
+  });
 });
