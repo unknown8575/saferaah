@@ -28,7 +28,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export async function checkServer(): Promise<boolean> {
   try {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 3000);
+    // a Cloud Run server that was asleep can take several seconds to wake
+    const t = setTimeout(() => ctl.abort(), 10000);
     const r = await fetch(url('api/health'), { signal: ctl.signal });
     clearTimeout(t);
     const d = r.ok ? await r.json() : null;

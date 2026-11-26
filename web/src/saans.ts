@@ -13,7 +13,8 @@ import { dayPlan, TRAVEL_LABEL, hourLabel, type Family, type Travel } from '../.
 export interface SaansEnv {
   air: () => Promise<AirNow | null>;
   route: () => RouteSummary | null;
-  online: () => boolean;
+  /** whether the SafeRaah server answers (may wake it up) */
+  online: () => boolean | Promise<boolean>;
 }
 
 interface Msg { role: 'user' | 'assistant'; text: string; notes?: { n: number; title: string; source: string }[]; engine?: string }
@@ -235,7 +236,7 @@ async function ask(env: SaansEnv, raw: string, msgs: HTMLElement) {
   const ctx: AssistantContext = { air: airNow, family: load().family, route: env.route() };
   let ans: Msg;
   try {
-    if (!env.online()) throw new Error('offline');
+    if (!(await env.online())) throw new Error('offline');
     const history = chat.slice(0, -1).slice(-4).map((m) => ({ role: m.role, text: m.text }));
     const r = await api.assistant({ q, ctx, history });
     ans = { role: 'assistant', text: r.text, notes: r.notes, engine: r.engine };

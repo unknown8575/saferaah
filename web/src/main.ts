@@ -1035,7 +1035,7 @@ async function refreshAir(): Promise<AirNow | null> {
   return S.air;
 }
 function askSaans(ask?: string) {
-  openSaans({ air: refreshAir, route: routeSummary, online: () => isOnline() }, { ask });
+  openSaans({ air: refreshAir, route: routeSummary, online: async () => isOnline() || checkServer() }, { ask });
 }
 
 function havenLine(r: WorkerRoute): string {
