@@ -4,6 +4,7 @@
 //   GEMINI_MODEL          text model, default "gemini-flash-latest"
 //   GEMINI_EMBED_MODEL    embedding model, default "gemini-embedding-001"
 //   GOOGLE_AIR_KEY        Google Air Quality API key (current conditions, CPCB AQI)
+//   GEMINI_DAILY_LIMIT    most Gemini answers per day for the whole server (default 500)
 // Without them the assistant uses its built-in engine and air comes from Open-Meteo.
 import { parseOpenMeteo, naqi, type AirNow } from '../shared/air.ts';
 import { NOTES } from '../shared/saans/knowledge.ts';
@@ -20,7 +21,10 @@ export interface AiConfig {
   model?: string;
   embedModel?: string;
   airKey?: string;
+  /** most Gemini answers per day for the whole server (then the built-in engine answers) */
+  dailyLimit?: number;
   fetch?: Fetch;
+  now?: () => number;
 }
 export function aiConfigFromEnv(): AiConfig {
   return {
@@ -28,6 +32,7 @@ export function aiConfigFromEnv(): AiConfig {
     model: process.env.GEMINI_MODEL || undefined,
     embedModel: process.env.GEMINI_EMBED_MODEL || undefined,
     airKey: process.env.GOOGLE_AIR_KEY || undefined,
+    dailyLimit: process.env.GEMINI_DAILY_LIMIT ? Number(process.env.GEMINI_DAILY_LIMIT) : undefined,
   };
 }
 
@@ -44,6 +49,15 @@ export class Ai {
   private noteVecs: number[][] | null = null;
   private embedFailed = false;
   private airCache = new Map<string, { at: number; v: AirNow | null }>();
+  private day = { key: '', used: 0 };
+  /** Count one Gemini answer against today's cap; false when the cap is reached. */
+  private takeQuota(): boolean {
+    const key = new Date((this.cfg.now ?? Date.now)()).toISOString().slice(0, 10);
+    if (this.day.key !== key) this.day = { key, used: 0 };
+    if (this.day.used >= (this.cfg.dailyLimit ?? 500)) return false;
+    this.day.used++;
+    return true;
+  }
   constructor(private cfg: AiConfig) {
     this.f = cfg.fetch ?? fetch;
     this.model = cfg.model ?? 'gemini-flash-latest';
@@ -99,10 +113,11 @@ export class Ai {
 
   /** Answer a question: Gemini grounded on our facts and notes, or the built-in engine. */
   async answer(q: string, ctx: AssistantContext, history: Turn[] = []): Promise<Answer & { fallback?: boolean }> {
-    const dense = this.hasGemini ? await this.dense(q) : undefined;
+    const useGemini = this.hasGemini && this.takeQuota();
+    const dense = useGemini ? await this.dense(q) : undefined;
     const notes = groundingNotes(q, dense);
     const base = compose(q, ctx, notes);
-    if (!this.hasGemini) return base;
+    if (!useGemini) return base;
     try {
       const p = buildPrompt(q, ctx, notes, history);
       const j = await this.gl(`models/${this.model}:generateContent`, {

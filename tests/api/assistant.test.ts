@@ -117,4 +117,11 @@ describe('Saans API', () => {
     expect(a.pm25).toBe(1500);
     expect(a.hours).toHaveLength(1);
   });
+  it('TC-196 a daily cap on Gemini answers falls back to the built-in engine', async () => {
+    const ai = new Ai({ geminiKey: 'k', dailyLimit: 2, fetch: fakeFetch });
+    const c = { air: null, family: cleanFamily({}), route: null };
+    expect((await ai.answer('mask?', c)).engine).toBe('gemini');
+    expect((await ai.answer('mask?', c)).engine).toBe('gemini');
+    expect((await ai.answer('mask?', c)).engine).toBe('saans');
+  });
 });

@@ -62,6 +62,7 @@ Google services (all optional, set on the server only):
 |---|---|
 | `GEMINI_API_KEY` | Saans answers (`GEMINI_MODEL`, default `gemini-flash-latest`) and note embeddings for vector search (`GEMINI_EMBED_MODEL`, default `gemini-embedding-001`) |
 | `GOOGLE_AIR_KEY` | Google Air Quality API current conditions (else CAMS via Open-Meteo) |
+| `GEMINI_DAILY_LIMIT` | Most Gemini answers per day for the whole server (default 500); after that the built-in engine answers |
 
 Deploy to Cloud Run: `gcloud run deploy saferaah --source . --region asia-south1 --allow-unauthenticated --set-env-vars GEMINI_API_KEY=…` (the `Dockerfile` builds the app and serves it on port 8080). Then set `SAFERAAH_API_BASE` (repository variable) to the service URL and `ALLOWED_ORIGINS` on the service to your website's origin.
 
