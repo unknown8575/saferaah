@@ -29,7 +29,8 @@ jobs:
         env:
           # set this repository variable to your SafeRaah server's https address to turn on
           # live trip links, live reports and reviews
-          VITE_API_BASE: ${{ vars.SAFERAAH_API_BASE }}
+          # the SafeRaah server on Google Cloud Run (a repository variable overrides it)
+          VITE_API_BASE: ${{ vars.SAFERAAH_API_BASE || 'https://saferaah-87901400101.asia-south1.run.app' }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
