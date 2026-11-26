@@ -1,7 +1,9 @@
 // Google services used by the server, all optional and all keyed by environment
 // variables (never shipped to the browser):
 //   GEMINI_API_KEY        Gemini API key (Google AI Studio)
-//   GEMINI_MODEL          text model, default "gemini-flash-latest"
+//   GEMINI_VERTEX         1 = Gemini on Vertex AI with the Cloud Run service account (no key);
+//                         on by default on Cloud Run when there is no key
+//   GEMINI_MODEL          text model to try first (then newer stable names are tried)
 //   GEMINI_EMBED_MODEL    embedding model, default "gemini-embedding-001"
 //   GOOGLE_AIR_KEY        Google Air Quality API key (current conditions, CPCB AQI)
 //   GEMINI_DAILY_LIMIT    most Gemini answers per day for the whole server (default 500)
@@ -21,6 +23,10 @@ export interface AiConfig {
   model?: string;
   embedModel?: string;
   airKey?: string;
+  /** use Gemini on Vertex AI with the server's Google Cloud identity (no key; billed to the project) */
+  vertex?: boolean;
+  /** Google Cloud project id for Vertex AI (default: from the metadata server) */
+  project?: string;
   /** most Gemini answers per day for the whole server (then the built-in engine answers) */
   dailyLimit?: number;
   fetch?: Fetch;
@@ -32,6 +38,9 @@ export function aiConfigFromEnv(): AiConfig {
     model: process.env.GEMINI_MODEL || undefined,
     embedModel: process.env.GEMINI_EMBED_MODEL || undefined,
     airKey: process.env.GOOGLE_AIR_KEY || undefined,
+    // on Cloud Run (K_SERVICE is set) with no key, use Vertex AI unless GEMINI_VERTEX=0
+    vertex: process.env.GEMINI_VERTEX === '1' || (!process.env.GEMINI_API_KEY && !!process.env.K_SERVICE && process.env.GEMINI_VERTEX !== '0'),
+    project: process.env.GOOGLE_CLOUD_PROJECT || undefined,
     dailyLimit: process.env.GEMINI_DAILY_LIMIT ? Number(process.env.GEMINI_DAILY_LIMIT) : undefined,
   };
 }
@@ -42,59 +51,101 @@ async function withTimeout<T>(ms: number, f: (signal: AbortSignal) => Promise<T>
   try { return await f(ctl.signal); } finally { clearTimeout(t); }
 }
 
+/** Model names to try, newest-stable aliases first; the first that answers is kept. */
+const MODEL_CANDIDATES = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+const META = 'http://metadata.google.internal/computeMetadata/v1';
+
 export class Ai {
   private f: Fetch;
-  private model: string;
+  private models: string[];
   private embedModel: string;
   private noteVecs: number[][] | null = null;
-  private embedFailed = false;
+  private embedRetryAt = 0;
   private airCache = new Map<string, { at: number; v: AirNow | null }>();
   private day = { key: '', used: 0 };
+  private token: { value: string; until: number } | null = null;
+  private project: string | null;
+  constructor(private cfg: AiConfig) {
+    this.f = cfg.fetch ?? fetch;
+    this.models = cfg.model ? [cfg.model, ...MODEL_CANDIDATES.filter((m) => m !== cfg.model)] : [...MODEL_CANDIDATES];
+    this.embedModel = cfg.embedModel ?? 'gemini-embedding-001';
+    this.project = cfg.project ?? null;
+  }
+  /** Gemini through an AI Studio key, or through Vertex AI with the service's own identity. */
+  get mode(): 'key' | 'vertex' | null { return this.cfg.geminiKey ? 'key' : this.cfg.vertex ? 'vertex' : null; }
+  get hasGemini() { return this.mode !== null; }
+  get hasGoogleAir() { return !!this.cfg.airKey; }
+  private get now() { return (this.cfg.now ?? Date.now)(); }
+
   /** Count one Gemini answer against today's cap; false when the cap is reached. */
   private takeQuota(): boolean {
-    const key = new Date((this.cfg.now ?? Date.now)()).toISOString().slice(0, 10);
+    const key = new Date(this.now).toISOString().slice(0, 10);
     if (this.day.key !== key) this.day = { key, used: 0 };
     if (this.day.used >= (this.cfg.dailyLimit ?? 500)) return false;
     this.day.used++;
     return true;
   }
-  constructor(private cfg: AiConfig) {
-    this.f = cfg.fetch ?? fetch;
-    this.model = cfg.model ?? 'gemini-flash-latest';
-    this.embedModel = cfg.embedModel ?? 'gemini-embedding-001';
-  }
-  get hasGemini() { return !!this.cfg.geminiKey; }
-  get hasGoogleAir() { return !!this.cfg.airKey; }
 
-  private async gl(path: string, body: unknown, ms = 20000): Promise<any> {
+  /** Vertex AI: an access token for the Cloud Run service account, from the metadata server. */
+  private async vertexAuth(): Promise<{ token: string; project: string }> {
+    if (!this.token || this.token.until < this.now) {
+      const r = await this.f(`${META}/instance/service-accounts/default/token`, { headers: { 'Metadata-Flavor': 'Google' } });
+      if (!r.ok) throw new Error(`metadata token ${r.status}`);
+      const j = await r.json();
+      this.token = { value: j.access_token, until: this.now + (Number(j.expires_in ?? 300) - 60) * 1000 };
+    }
+    if (!this.project) {
+      const r = await this.f(`${META}/project/project-id`, { headers: { 'Metadata-Flavor': 'Google' } });
+      if (!r.ok) throw new Error(`metadata project ${r.status}`);
+      this.project = (await r.text()).trim();
+    }
+    return { token: this.token.value, project: this.project };
+  }
+
+  /** POST to Gemini. `op` is e.g. "gemini-x:generateContent". */
+  private async call(model: string, op: string, body: unknown, ms = 25000, location = 'global'): Promise<any> {
     return withTimeout(ms, async (signal) => {
-      const r = await this.f(`${GL}/${path}`, {
-        method: 'POST', signal,
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': this.cfg.geminiKey! },
-        body: JSON.stringify(body),
-      });
+      let url: string, headers: Record<string, string>;
+      if (this.mode === 'key') {
+        url = `${GL}/models/${model}:${op}`;
+        headers = { 'content-type': 'application/json', 'x-goog-api-key': this.cfg.geminiKey! };
+      } else {
+        const a = await this.vertexAuth();
+        const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+        url = `https://${host}/v1/projects/${a.project}/locations/${location}/publishers/google/models/${model}:${op}`;
+        headers = { 'content-type': 'application/json', authorization: `Bearer ${a.token}` };
+      }
+      const r = await this.f(url, { method: 'POST', signal, headers, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(`Gemini ${r.status}: ${j?.error?.message ?? 'error'}`);
+      if (!r.ok) throw Object.assign(new Error(`Gemini ${r.status}: ${j?.error?.message ?? 'error'}`), { status: r.status });
       return j;
     });
   }
 
-  /** Embeddings of every note, computed once (vector search). */
+  /** Embed texts (vector search). AI Studio takes a batch; Vertex takes one text per call. */
+  private async embed(texts: { text: string; title?: string }[], task: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY', ms = 15000): Promise<number[][]> {
+    if (this.mode === 'key') {
+      const j = await this.call(this.embedModel, 'batchEmbedContents', {
+        requests: texts.map((t) => ({ model: `models/${this.embedModel}`, taskType: task, title: t.title, content: { parts: [{ text: t.text }] } })),
+      }, ms);
+      return (j.embeddings ?? []).map((e: any) => e.values as number[]);
+    }
+    return Promise.all(texts.map(async (t) => {
+      const j = await this.call(this.embedModel, 'predict', { instances: [{ content: t.text, task_type: task, title: t.title }] }, ms, 'us-central1');
+      return j.predictions?.[0]?.embeddings?.values as number[];
+    }));
+  }
+
+  /** Embeddings of every note, computed once (vector search); retried later if it failed. */
   private async notesEmbedded(): Promise<number[][] | null> {
-    if (this.noteVecs || this.embedFailed || !this.hasGemini) return this.noteVecs;
+    if (this.noteVecs || !this.hasGemini || this.now < this.embedRetryAt) return this.noteVecs;
     try {
-      const j = await this.gl(`models/${this.embedModel}:batchEmbedContents`, {
-        requests: NOTES.map((n) => ({
-          model: `models/${this.embedModel}`, taskType: 'RETRIEVAL_DOCUMENT', title: n.title,
-          content: { parts: [{ text: `${n.title}. ${n.text} ${n.tags}` }] },
-        })),
-      });
-      this.noteVecs = (j.embeddings ?? []).map((e: any) => e.values as number[]);
-      if (this.noteVecs!.length !== NOTES.length) throw new Error('embedding count mismatch');
+      const vecs = await this.embed(NOTES.map((n) => ({ title: n.title, text: `${n.title}. ${n.text} ${n.tags}` })), 'RETRIEVAL_DOCUMENT', 30000);
+      if (vecs.length !== NOTES.length || vecs.some((v) => !v?.length)) throw new Error('embedding count mismatch');
+      this.noteVecs = vecs;
     } catch (err) {
-      console.warn('[saans] embeddings off:', (err as Error).message);
-      this.embedFailed = true;
-      this.noteVecs = null;
+      console.warn('[saans] embeddings off for 10 min:', (err as Error).message);
+      this.embedRetryAt = this.now + 10 * 60000;
     }
     return this.noteVecs;
   }
@@ -103,12 +154,26 @@ export class Ai {
     const vecs = await this.notesEmbedded();
     if (!vecs) return undefined;
     try {
-      const j = await this.gl(`models/${this.embedModel}:embedContent`, {
-        model: `models/${this.embedModel}`, taskType: 'RETRIEVAL_QUERY', content: { parts: [{ text: q }] },
-      }, 8000);
-      const qv = j.embedding?.values as number[] | undefined;
-      return qv ? vecs.map((v) => cosine(qv, v)) : undefined;
+      const [qv] = await this.embed([{ text: q }], 'RETRIEVAL_QUERY', 8000);
+      return qv?.length ? vecs.map((v) => cosine(qv, v)) : undefined;
     } catch { return undefined; }
+  }
+
+  /** generateContent on the first model that exists; remembers it. */
+  private async generate(body: unknown): Promise<{ j: any; model: string }> {
+    let last: unknown;
+    for (const m of [...this.models]) {
+      try {
+        return { j: await this.call(m, 'generateContent', body), model: m };
+      } catch (err) {
+        last = err;
+        // only an unknown or retired model moves on to the next name
+        if ((err as { status?: number }).status !== 404) throw err;
+        console.warn(`[saans] model ${m} not available, trying the next one`);
+        this.models = this.models.filter((x) => x !== m).concat(m);
+      }
+    }
+    throw last;
   }
 
   /** Answer a question: Gemini grounded on our facts and notes, or the built-in engine. */
@@ -120,15 +185,16 @@ export class Ai {
     if (!useGemini) return base;
     try {
       const p = buildPrompt(q, ctx, notes, history);
-      const j = await this.gl(`models/${this.model}:generateContent`, {
+      const { j, model } = await this.generate({
         systemInstruction: { parts: [{ text: p.system }] },
         contents: p.contents,
-        generationConfig: { maxOutputTokens: 700 },
+        // room for the model's own thinking as well as the short answer
+        generationConfig: { maxOutputTokens: 2048 },
         safetySettings: [{ category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }],
       });
-      const text = (j.candidates?.[0]?.content?.parts ?? []).map((x: any) => x.text ?? '').join('').trim();
+      const text = (j.candidates?.[0]?.content?.parts ?? []).filter((x: any) => !x.thought).map((x: any) => x.text ?? '').join('').trim();
       if (!text) throw new Error('empty answer');
-      return { ...base, text: cleanModelText(text), engine: 'gemini', model: j.modelVersion ?? this.model };
+      return { ...base, text: cleanModelText(text), engine: 'gemini', model: j.modelVersion ?? model };
     } catch (err) {
       console.warn('[saans] Gemini failed, using built-in answer:', (err as Error).message);
       return { ...base, fallback: true };

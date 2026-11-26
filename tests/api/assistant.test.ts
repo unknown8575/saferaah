@@ -87,8 +87,9 @@ describe('Saans API', () => {
     expect(prompt).toContain('Family: 2 adults, 1 child');
     expect(gen.body.systemInstruction.parts[0].text).toMatch(/Use ONLY the numbers in FACTS/);
     // vector search: notes were embedded once, the question once
-    expect(calls.filter((c) => c.url.includes(':batchEmbedContents'))).toHaveLength(1);
-    expect(calls.find((c) => c.url.includes(':batchEmbedContents'))!.body.requests).toHaveLength(NOTES.length);
+    const embeds = calls.filter((c) => c.url.includes(':batchEmbedContents'));
+    expect(embeds.filter((c) => c.body.requests.length === NOTES.length)).toHaveLength(1); // notes, once
+    expect(embeds.filter((c) => c.body.requests.length === 1)).toHaveLength(1); // the question
   });
   it('TC-193 without a key, or when Gemini fails, the built-in engine answers', async () => {
     const a = await call(baseNoKey, 'POST', '/api/assistant', { q: 'Which purifier for my bedroom?', ctx });
@@ -123,5 +124,42 @@ describe('Saans API', () => {
     expect((await ai.answer('mask?', c)).engine).toBe('gemini');
     expect((await ai.answer('mask?', c)).engine).toBe('gemini');
     expect((await ai.answer('mask?', c)).engine).toBe('saans');
+  });
+  it('TC-197 Vertex AI mode: service-account token, project from metadata, unknown models skipped', async () => {
+    const seen: string[] = [];
+    const vf: Fetch = (async (input: any, init: any = {}) => {
+      const url = String(input);
+      seen.push(url);
+      const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status });
+      if (url.endsWith('/service-accounts/default/token')) {
+        expect(init.headers['Metadata-Flavor']).toBe('Google');
+        return json({ access_token: 'tok-1', expires_in: 3600 });
+      }
+      if (url.endsWith('/project/project-id')) return new Response('my-proj');
+      if (url.includes(':predict')) {
+        expect(init.headers.authorization).toBe('Bearer tok-1');
+        return json({ predictions: [{ embeddings: { values: [1, 0] } }] });
+      }
+      if (url.includes('gemini-flash-latest:generateContent')) return json({ error: { message: 'not found' } }, 404);
+      if (url.includes(':generateContent')) {
+        expect(init.headers.authorization).toBe('Bearer tok-1');
+        return json({ candidates: [{ content: { parts: [{ text: 'thinking…', thought: true }, { text: 'Use a 180 m³/h purifier [1].' }] } }] });
+      }
+      return json({}, 500);
+    }) as Fetch;
+    const ai = new Ai({ vertex: true, fetch: vf });
+    expect(ai.hasGemini).toBe(true);
+    const a = await ai.answer('Which purifier?', { air: null, family: cleanFamily({}), route: null });
+    expect(a.engine).toBe('gemini');
+    expect(a.text).toBe('Use a 180 m³/h purifier [1].');
+    expect(a.model).toBe('gemini-3.8-flash');
+    const gen = seen.filter((u) => u.includes(':generateContent'));
+    expect(gen[0]).toBe('https://aiplatform.googleapis.com/v1/projects/my-proj/locations/global/publishers/google/models/gemini-flash-latest:generateContent');
+    expect(seen.some((u) => u.startsWith('https://us-central1-aiplatform.googleapis.com/v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-embedding-001:predict'))).toBe(true);
+    // the working model is remembered: the next answer goes straight to it
+    seen.length = 0;
+    await ai.answer('mask?', { air: null, family: cleanFamily({}), route: null });
+    expect(seen.filter((u) => u.includes(':generateContent'))[0]).toContain('gemini-3.8-flash');
+    expect(seen.filter((u) => u.includes('/token'))).toHaveLength(0); // token cached
   });
 });
